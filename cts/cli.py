@@ -20,6 +20,7 @@ Usage:
   cts corpus evaluate before.jsonl after.jsonl --format markdown
   cts corpus experiment init --id EXP1 --description "..." --out experiment.json
   cts corpus experiment propose --corpus tuning.json --repos-yaml repos.yaml
+  cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -980,6 +981,8 @@ def _corpus_experiment(args: argparse.Namespace) -> None:
         _experiment_init(args)
     elif exp_action == "propose":
         _experiment_propose(args)
+    elif exp_action == "evaluate":
+        _experiment_evaluate(args)
 
 
 def _experiment_init(args: argparse.Namespace) -> None:
@@ -1109,6 +1112,63 @@ def _experiment_propose(args: argparse.Namespace) -> None:
             f"{v['active_patches']} active patch(es)",
             file=sys.stderr,
         )
+
+
+def _experiment_evaluate(args: argparse.Namespace) -> None:
+    from cts.corpus.experiment_eval import (
+        evaluate_experiment,
+        render_experiment_result_json,
+        render_experiment_result_markdown,
+        render_experiment_result_text,
+    )
+    from cts.corpus.report import load_corpus
+
+    corpus_path: str = args.corpus
+    experiment_path: str = args.experiment
+    fmt: str = getattr(args, "exp_eval_format", "text")
+    out_path: str | None = getattr(args, "out", None)
+
+    # Load corpus
+    try:
+        records = load_corpus(corpus_path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {corpus_path}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # Load experiment envelope
+    try:
+        with open(experiment_path, encoding="utf-8") as f:
+            experiment = json.load(f)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {experiment_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    result = evaluate_experiment(records, experiment)
+
+    if fmt == "json":
+        output = render_experiment_result_json(result)
+    elif fmt == "markdown":
+        output = render_experiment_result_markdown(result)
+    else:
+        output = render_experiment_result_text(result)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        verdict = result.get("verdict", "?")
+        winner = result.get("winner") or "none"
+        print(
+            f"Experiment eval: {out_path} (verdict: {verdict}, winner: {winner})",
+            file=sys.stderr,
+        )
+    else:
+        print(output)
 
 
 # ---------------------------------------------------------------------------
@@ -1474,6 +1534,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Strategy override: 'A=aggressive' (repeatable)",
+    )
+
+    # corpus experiment evaluate
+    p_ee = exp_sub.add_parser(
+        "evaluate",
+        help="Evaluate experiment: assign runs to variants and pick winner",
+    )
+    p_ee.add_argument(
+        "--corpus",
+        required=True,
+        help="Path to corpus JSONL (with variant-tagged records)",
+    )
+    p_ee.add_argument(
+        "--experiment",
+        required=True,
+        help="Path to experiment envelope JSON",
+    )
+    p_ee.add_argument(
+        "--format",
+        dest="exp_eval_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    p_ee.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write result to file (default: stdout)",
     )
 
     return parser
