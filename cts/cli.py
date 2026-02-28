@@ -18,6 +18,7 @@ Usage:
   cts corpus apply tuning.json --repos-yaml repos.yaml [--dry-run]
   cts corpus rollback rollback.json
   cts corpus evaluate before.jsonl after.jsonl --format markdown
+  cts corpus experiment init --id EXP1 --description "..." --out experiment.json
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -574,6 +575,8 @@ def cmd_corpus(args: argparse.Namespace) -> None:
         _corpus_rollback(args)
     elif action == "evaluate":
         _corpus_evaluate(args)
+    elif action == "experiment":
+        _corpus_experiment(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -959,6 +962,58 @@ def _corpus_evaluate(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Experiment subcommands
+# ---------------------------------------------------------------------------
+
+
+def _corpus_experiment(args: argparse.Namespace) -> None:
+    exp_action = getattr(args, "experiment_action", None)
+    if not exp_action:
+        print(
+            "Error: experiment requires a subcommand",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if exp_action == "init":
+        _experiment_init(args)
+
+
+def _experiment_init(args: argparse.Namespace) -> None:
+    from cts.corpus.experiment_schema import create_experiment
+
+    exp_id: str = getattr(args, "exp_id", "")
+    description: str = getattr(args, "description", "")
+    hypothesis: str = getattr(args, "hypothesis", "")
+    variants_str: str = getattr(args, "variants", "A,B")
+    primary_kpi: str = getattr(args, "primary_kpi", "confidence_final_mean")
+    constraints: list = getattr(args, "constraint", []) or []
+    out_path: str = getattr(args, "out", "experiment.json")
+
+    variant_names = [v.strip() for v in variants_str.split(",") if v.strip()]
+
+    envelope = create_experiment(
+        id=exp_id,
+        description=description,
+        hypothesis=hypothesis,
+        variant_names=variant_names,
+        primary_kpi=primary_kpi,
+        constraints=constraints,
+    )
+
+    payload = json.dumps(envelope.to_dict(), indent=2, default=str)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(payload)
+        f.write("\n")
+
+    n = len(envelope.variants)
+    print(
+        f"Experiment: {out_path} (id={envelope.id}, {n} variant(s))",
+        file=sys.stderr,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1236,6 +1291,59 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Write evaluation to file (default: stdout)",
+    )
+
+    # corpus experiment
+    p_cexp = corpus_sub.add_parser(
+        "experiment",
+        help="A/B tuning experiments",
+    )
+    exp_sub = p_cexp.add_subparsers(
+        dest="experiment_action",
+        help="Experiment subcommands",
+    )
+
+    # corpus experiment init
+    p_ei = exp_sub.add_parser(
+        "init",
+        help="Create a new experiment envelope",
+    )
+    p_ei.add_argument(
+        "--id",
+        dest="exp_id",
+        default="",
+        help="Experiment ID (auto-generated if omitted)",
+    )
+    p_ei.add_argument(
+        "--description",
+        default="",
+        help="What the experiment tests",
+    )
+    p_ei.add_argument(
+        "--hypothesis",
+        default="",
+        help="Expected outcome",
+    )
+    p_ei.add_argument(
+        "--variants",
+        default="A,B",
+        help="Comma-separated variant names (default: A,B)",
+    )
+    p_ei.add_argument(
+        "--primary-kpi",
+        default="confidence_final_mean",
+        help="KPI that decides the winner (default: confidence_final_mean)",
+    )
+    p_ei.add_argument(
+        "--constraint",
+        action="append",
+        default=None,
+        help="Constraint (e.g. 'truncation_rate<=+0.02'), repeatable",
+    )
+    p_ei.add_argument(
+        "--out",
+        default="experiment.json",
+        help="Output path (default: experiment.json)",
     )
 
     return parser

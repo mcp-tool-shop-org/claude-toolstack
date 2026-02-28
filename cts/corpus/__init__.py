@@ -23,6 +23,12 @@ from cts.corpus.evaluate import (
     evaluate,
     extract_kpis,
 )
+from cts.corpus.experiment_schema import (
+    ExperimentEnvelope,
+    VariantSpec,
+    create_experiment,
+    validate_experiment,
+)
 from cts.corpus.patch import (
     PatchItem,
     generate_patch_plan,
@@ -60,6 +66,10 @@ __all__ = [
     "PassRecord",
     "PatchItem",
     "RollbackRecord",
+    "ExperimentEnvelope",
+    "VariantSpec",
+    "create_experiment",
+    "validate_experiment",
     "TuningEnvelope",
     "TuningRecommendation",
 ]
