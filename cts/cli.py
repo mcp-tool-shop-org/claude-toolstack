@@ -12,6 +12,8 @@ Usage:
   cts sidecar validate artifact.json
   cts sidecar summarize artifact.json [--format markdown]
   cts sidecar secrets-scan artifact.json [--fail]
+  cts corpus ingest <dir> --out corpus.jsonl
+  cts corpus report corpus.jsonl --format markdown --out report.md
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -546,6 +548,117 @@ def _sidecar_secrets_scan(args: argparse.Namespace, mod: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Corpus subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_corpus(args: argparse.Namespace) -> None:
+    action = getattr(args, "corpus_action", None)
+    if not action:
+        print("Error: corpus requires a subcommand", file=sys.stderr)
+        raise SystemExit(1)
+
+    if action == "ingest":
+        _corpus_ingest(args)
+    elif action == "report":
+        # Placeholder for Commit 2
+        print("Error: corpus report not yet implemented", file=sys.stderr)
+        raise SystemExit(1)
+
+
+def _corpus_ingest(args: argparse.Namespace) -> None:
+    import time
+
+    from cts.corpus import (
+        extract_passes,
+        extract_record,
+        load_artifact,
+        scan_dir,
+        write_corpus,
+        write_passes,
+    )
+
+    target_dir: str = args.dir
+    out_path: str = args.out
+    fail_on_invalid: bool = getattr(args, "fail_on_invalid", False)
+    max_files: int = getattr(args, "max_files", 0)
+    since_days = getattr(args, "since", None)
+    include_passes: bool = getattr(args, "include_passes", False)
+
+    # Compute cutoff timestamp
+    cutoff = 0.0
+    if since_days is not None:
+        cutoff = time.time() - (since_days * 86400)
+
+    # Scan for candidate files
+    candidates = scan_dir(target_dir, max_files=max_files)
+    if not candidates:
+        print(f"No JSON files found in {target_dir}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # Load, validate, extract
+    records = []
+    pass_records = []
+    stats = {
+        "scanned": 0,
+        "ingested": 0,
+        "invalid": 0,
+        "skipped_date": 0,
+        "missing_debug": 0,
+    }
+
+    for path in candidates:
+        stats["scanned"] += 1
+        data, errors = load_artifact(path)
+
+        if errors:
+            stats["invalid"] += 1
+            if fail_on_invalid:
+                for e in errors:
+                    print(f"error: {path}: {e}", file=sys.stderr)
+                raise SystemExit(1)
+            continue
+
+        # Date filter
+        if cutoff > 0 and data.get("created_at", 0) < cutoff:
+            stats["skipped_date"] += 1
+            continue
+
+        record = extract_record(data, source_path=path)
+        if "_debug" in record.missing_fields:
+            stats["missing_debug"] += 1
+
+        records.append(record)
+        stats["ingested"] += 1
+
+        if include_passes:
+            pass_records.extend(extract_passes(data))
+
+    # Write output
+    written = write_corpus(records, out_path)
+
+    if include_passes and pass_records:
+        if out_path.endswith(".jsonl"):
+            passes_path = out_path[:-6] + "_passes.jsonl"
+        else:
+            passes_path = out_path + ".passes"
+        write_passes(pass_records, passes_path)
+        print(
+            f"Passes:        {passes_path} ({len(pass_records)} records)",
+            file=sys.stderr,
+        )
+
+    # Summary
+    print(f"Scanned:       {stats['scanned']}", file=sys.stderr)
+    print(f"Ingested:      {stats['ingested']}", file=sys.stderr)
+    print(f"Invalid:       {stats['invalid']}", file=sys.stderr)
+    if stats["skipped_date"]:
+        print(f"Skipped (date): {stats['skipped_date']}", file=sys.stderr)
+    print(f"Missing debug: {stats['missing_debug']}", file=sys.stderr)
+    print(f"Output:        {out_path} ({written} records)", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -645,6 +758,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print findings with redacted previews",
     )
 
+    # corpus
+    p_corpus = sub.add_parser("corpus", help="Corpus analytics for sidecar artifacts")
+    corpus_sub = p_corpus.add_subparsers(
+        dest="corpus_action", help="Corpus subcommands"
+    )
+
+    # corpus ingest
+    p_ci = corpus_sub.add_parser(
+        "ingest", help="Ingest sidecar artifacts into corpus JSONL"
+    )
+    p_ci.add_argument("dir", help="Directory containing sidecar artifacts")
+    p_ci.add_argument(
+        "--out",
+        default="corpus.jsonl",
+        help="Output JSONL path (default: corpus.jsonl)",
+    )
+    p_ci.add_argument(
+        "--fail-on-invalid",
+        action="store_true",
+        default=False,
+        help="Exit nonzero on first invalid artifact (default: skip)",
+    )
+    p_ci.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Max files to scan (0 = unlimited)",
+    )
+    p_ci.add_argument(
+        "--since",
+        type=float,
+        default=None,
+        metavar="DAYS",
+        help="Only ingest artifacts created within N days",
+    )
+    p_ci.add_argument(
+        "--include-passes",
+        action="store_true",
+        default=False,
+        help="Also write pass-level JSONL (corpus_passes.jsonl)",
+    )
+
+    # corpus report (placeholder for Commit 2)
+    corpus_sub.add_parser("report", help="Generate analytics report from corpus JSONL")
+
     return parser
 
 
@@ -664,6 +822,7 @@ def main(argv: List[str] | None = None) -> None:
         "index": cmd_index,
         "job": cmd_job,
         "sidecar": cmd_sidecar,
+        "corpus": cmd_corpus,
     }
     fn = commands.get(args.command)
     if fn:

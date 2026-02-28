@@ -1,0 +1,23 @@
+"""Corpus analytics: ingest sidecar artifacts into structured JSONL.
+
+Provides scan → load → extract → store pipeline for turning
+CI-produced sidecar artifacts into a normalized corpus suitable
+for aggregate reporting and tuning analysis.
+"""
+
+from cts.corpus.extract import extract_passes, extract_record
+from cts.corpus.load import load_artifact
+from cts.corpus.model import CorpusRecord, PassRecord
+from cts.corpus.scan import scan_dir
+from cts.corpus.store import write_corpus, write_passes
+
+__all__ = [
+    "scan_dir",
+    "load_artifact",
+    "extract_record",
+    "extract_passes",
+    "write_corpus",
+    "write_passes",
+    "CorpusRecord",
+    "PassRecord",
+]

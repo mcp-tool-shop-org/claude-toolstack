@@ -1,0 +1,278 @@
+"""Extract normalized metrics from sidecar artifacts.
+
+Defensive parsing: missing fields are tracked in ``missing_fields``
+rather than raising exceptions.  This ensures partial ingestion is
+always possible even as the sidecar schema evolves.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
+from cts.confidence import bundle_confidence
+from cts.corpus.model import CorpusRecord, PassRecord
+
+# Sections whose byte sizes are measured in the final bundle
+_SECTION_KEYS = [
+    "ranked_sources",
+    "matches",
+    "slices",
+    "symbols",
+    "diff",
+    "suggested_commands",
+    "notes",
+]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _json_bytes(obj: Any) -> int:
+    """Compute the JSON-encoded byte size of *obj*."""
+    try:
+        return len(json.dumps(obj, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_section_bytes(final: Dict[str, Any]) -> Dict[str, int]:
+    """Compute byte sizes for each section in the final bundle."""
+    result: Dict[str, int] = {}
+    for key in _SECTION_KEYS:
+        if key in final:
+            result[key] = _json_bytes(final[key])
+    return result
+
+
+def _extract_truncation_flags(final: Dict[str, Any]) -> Dict[str, bool]:
+    """Extract truncation flags from the final bundle."""
+    flags: Dict[str, bool] = {}
+    if "truncated" in final:
+        flags["truncated"] = bool(final["truncated"])
+    return flags
+
+
+def _extract_timings(final: Dict[str, Any]) -> Dict[str, float]:
+    """Extract timing data from ``_debug.timings`` if present."""
+    debug = final.get("_debug")
+    if not isinstance(debug, dict):
+        return {}
+    timings = debug.get("timings")
+    if not isinstance(timings, dict):
+        return {}
+    result: Dict[str, float] = {}
+    for key, val in timings.items():
+        if isinstance(val, (int, float)):
+            result[key] = float(val)
+    return result
+
+
+def _extract_actions(passes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build an ordered action list from all pass records.
+
+    Includes trigger reasons and summary counts but never raw file
+    content or diff text (safe for corpus output).
+    """
+    actions: List[Dict[str, Any]] = []
+    _COUNT_KEYS = (
+        "trace_targets_count",
+        "def_targets_count",
+        "caller_targets_count",
+        "changed_targets_count",
+        "ident_count",
+    )
+
+    for p in passes:
+        details = p.get("action_details", [])
+        action_names = p.get("actions", [])
+
+        if details:
+            for detail in details:
+                record: Dict[str, Any] = {"name": detail.get("name", "")}
+                if "trigger_reason" in detail:
+                    record["trigger_reason"] = detail["trigger_reason"]
+                for key in _COUNT_KEYS:
+                    if key in detail:
+                        record[key] = detail[key]
+                actions.append(record)
+        elif action_names:
+            # Fallback: just action names without details
+            for name in action_names:
+                actions.append({"name": name})
+
+    return actions
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def extract_record(
+    sidecar: Dict[str, Any],
+    *,
+    source_path: str = "",
+) -> CorpusRecord:
+    """Extract a normalized :class:`CorpusRecord` from a sidecar dict.
+
+    Missing or unparseable fields are tracked in ``missing_fields``
+    rather than raising.  This allows partial ingestion of artifacts
+    whose ``_debug`` section is absent or whose schema is slightly
+    ahead of the extractor.
+    """
+    missing: List[str] = []
+
+    # --- Identity ---
+    schema_version = sidecar.get("bundle_schema_version", 0)
+    if not schema_version:
+        missing.append("bundle_schema_version")
+
+    repo = sidecar.get("repo", "")
+    if not repo:
+        missing.append("repo")
+
+    mode = sidecar.get("mode", "")
+    if not mode:
+        missing.append("mode")
+
+    created_at = sidecar.get("created_at", 0.0)
+    if not created_at:
+        missing.append("created_at")
+
+    request_id = sidecar.get("request_id", "")
+    if not request_id:
+        missing.append("request_id")
+
+    # --- Passes ---
+    passes = sidecar.get("passes", [])
+    passes_count = len(passes)
+
+    # --- Final bundle ---
+    final = sidecar.get("final", {})
+    if not final:
+        missing.append("final")
+
+    # --- Confidence ---
+    confidence_pass1: Optional[float] = None
+    confidence_final: Optional[float] = None
+    confidence_delta: Optional[float] = None
+
+    # Score cards from _debug (if available)
+    score_cards = None
+    debug_data = final.get("_debug") if final else None
+    if isinstance(debug_data, dict):
+        score_cards = debug_data.get("score_cards")
+    else:
+        missing.append("_debug")
+
+    if passes:
+        # confidence_pass1 from first pass record
+        c1 = passes[0].get("confidence_before")
+        if isinstance(c1, (int, float)):
+            confidence_pass1 = float(c1)
+        else:
+            missing.append("confidence_pass1")
+
+    # confidence_final: recompute from final bundle
+    if final:
+        try:
+            conf = bundle_confidence(final, score_cards=score_cards)
+            confidence_final = conf["score"]
+        except Exception:
+            missing.append("confidence_final")
+
+    # When no passes ran, initial IS final
+    if confidence_pass1 is None and confidence_final is not None:
+        confidence_pass1 = confidence_final
+
+    if confidence_pass1 is not None and confidence_final is not None:
+        confidence_delta = round(confidence_final - confidence_pass1, 4)
+
+    # --- Actions ---
+    actions = _extract_actions(passes)
+
+    # --- Size metrics ---
+    bundle_bytes_final = _json_bytes(final) if final else 0
+    section_bytes = _extract_section_bytes(final)
+
+    # --- Truncation ---
+    truncation_flags = _extract_truncation_flags(final)
+
+    # --- Timings ---
+    timings_ms = _extract_timings(final)
+    if not timings_ms and isinstance(debug_data, dict):
+        # _debug present but no timings sub-key
+        missing.append("timings")
+
+    return CorpusRecord(
+        schema_version=schema_version,
+        repo=repo,
+        mode=mode,
+        created_at=created_at,
+        request_id=request_id,
+        source_path=source_path,
+        passes_count=passes_count,
+        confidence_pass1=confidence_pass1,
+        confidence_final=confidence_final,
+        confidence_delta=confidence_delta,
+        actions=actions,
+        bundle_bytes_final=bundle_bytes_final,
+        section_bytes=section_bytes,
+        truncation_flags=truncation_flags,
+        timings_ms=timings_ms,
+        missing_fields=missing,
+    )
+
+
+def extract_passes(
+    sidecar: Dict[str, Any],
+) -> List[PassRecord]:
+    """Extract per-pass records from a sidecar artifact.
+
+    Returns one :class:`PassRecord` per refinement pass.  Sensitive
+    content (file paths in target lists) is stripped — only counts
+    and trigger reasons are kept.
+    """
+    request_id = sidecar.get("request_id", "")
+    passes = sidecar.get("passes", [])
+    records: List[PassRecord] = []
+
+    _COUNT_KEYS = (
+        "trace_targets_count",
+        "def_targets_count",
+        "caller_targets_count",
+        "changed_targets_count",
+        "ident_count",
+    )
+
+    for i, p in enumerate(passes):
+        action_names = p.get("actions", [])
+        details = p.get("action_details", [])
+
+        # Sanitize action details (counts + reasons only)
+        clean_details: List[Dict[str, Any]] = []
+        for d in details:
+            clean: Dict[str, Any] = {"name": d.get("name", "")}
+            if "trigger_reason" in d:
+                clean["trigger_reason"] = d["trigger_reason"]
+            for key in _COUNT_KEYS:
+                if key in d:
+                    clean[key] = d[key]
+            clean_details.append(clean)
+
+        records.append(
+            PassRecord(
+                request_id=request_id,
+                pass_index=i,
+                confidence=p.get("confidence_before"),
+                actions_this_pass=action_names,
+                action_details=clean_details,
+                status=p.get("status", ""),
+                elapsed_ms=p.get("elapsed_ms", 0.0),
+            )
+        )
+
+    return records
