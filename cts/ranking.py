@@ -1,10 +1,13 @@
-"""Match ranking: path weighting, stack trace boost, recency."""
+"""Match ranking: path weighting, stack trace boost, recency.
+
+Supports explain mode for per-candidate signal breakdown.
+"""
 
 from __future__ import annotations
 
 import re
 import subprocess
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Path segments that indicate "real code" (boost)
 PREFERRED_ROOTS = {
@@ -123,10 +126,27 @@ def path_score(
 
     Default range roughly -1.0 to +1.0.
     """
-    score = 0.0
+    return path_score_explained(path, prefer, avoid)["score"]
+
+
+def path_score_explained(
+    path: str,
+    prefer: Optional[List[str]] = None,
+    avoid: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Score a path and return signal breakdown.
+
+    Returns dict with:
+      score: float
+      path_boost: float
+      path_penalty: float
+      test_penalty: float
+      classification: preferred|avoided|neutral
+      prefer_match: str|None  (which segment matched)
+      avoid_match: str|None
+    """
     parts = set(path.replace("\\", "/").split("/"))
 
-    # Built-in boosts
     preferred = PREFERRED_ROOTS
     if prefer:
         preferred = preferred | set(prefer)
@@ -134,19 +154,42 @@ def path_score(
     if avoid:
         deprioritized = deprioritized | set(avoid)
 
-    if parts & preferred:
-        score += 0.5
-    if parts & deprioritized:
-        score -= 0.8
+    path_boost = 0.0
+    path_penalty = 0.0
+    test_penalty = 0.0
+    prefer_match: Optional[str] = None
+    avoid_match: Optional[str] = None
+    classification = "neutral"
 
-    # Test files get a slight demotion (not as much as vendor)
+    hit = parts & preferred
+    if hit:
+        path_boost = 0.5
+        prefer_match = sorted(hit)[0]
+        classification = "preferred"
+
+    hit_avoid = parts & deprioritized
+    if hit_avoid:
+        path_penalty = -0.8
+        avoid_match = sorted(hit_avoid)[0]
+        classification = "avoided"
+
     basename = path.rsplit("/", 1)[-1] if "/" in path else path
     if basename.startswith("test_") or basename.endswith("_test.go"):
-        score -= 0.2
+        test_penalty = -0.2
     if ".test." in basename or ".spec." in basename:
-        score -= 0.2
+        test_penalty = -0.2
 
-    return score
+    score = path_boost + path_penalty + test_penalty
+
+    return {
+        "score": score,
+        "path_boost": path_boost,
+        "path_penalty": path_penalty,
+        "test_penalty": test_penalty,
+        "classification": classification,
+        "prefer_match": prefer_match,
+        "avoid_match": avoid_match,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -213,39 +256,85 @@ def rank_matches(
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
     repo_root: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    explain: bool = False,
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Re-rank matches using path score + trace boost + recency.
 
-    Returns a new list sorted by composite score (descending).
-    If *repo_root* is provided, git recency is factored in.
+    Returns a sorted list with _rank_score attached.
+    If *explain=True*, returns (ranked, score_cards) where score_cards
+    is a list of per-candidate signal breakdowns.
     """
     trace_set = set()
     if trace_files:
         for fpath, _ in trace_files:
             trace_set.add(fpath)
-            # Also match by basename for partial paths
             if "/" in fpath:
                 trace_set.add(fpath.rsplit("/", 1)[-1])
 
     scored = []
+    cards: List[Dict[str, Any]] = []
+
     for m in matches:
         path = m.get("path", "")
-        score = path_score(path, prefer=prefer_paths, avoid=avoid_paths)
-        # Trace boost: hard priority
+
+        # Path signal
+        path_detail = path_score_explained(path, prefer=prefer_paths, avoid=avoid_paths)
+        path_total = path_detail["score"]
+
+        # Trace signal
+        trace_boost = 0.0
+        is_trace = False
         basename = path.rsplit("/", 1)[-1] if "/" in path else path
         if path in trace_set or basename in trace_set:
-            score += 2.0
-        # Recency boost (only when repo_root is available)
+            trace_boost = 2.0
+            is_trace = True
+
+        # Recency signal
+        rec_boost = 0.0
+        git_hours: Optional[float] = None
         if repo_root:
-            hours = file_recency_hours(repo_root, path)
-            score += recency_score(hours)
-        scored.append((score, m))
+            git_hours = file_recency_hours(repo_root, path)
+            rec_boost = recency_score(git_hours)
+
+        total = path_total + trace_boost + rec_boost
+        scored.append((total, m))
+
+        if explain:
+            cards.append(
+                {
+                    "path": path,
+                    "line": m.get("line", 0),
+                    "score_total": round(total, 2),
+                    "signals": {
+                        "path_boost": path_detail["path_boost"],
+                        "path_penalty": path_detail["path_penalty"],
+                        "test_penalty": path_detail["test_penalty"],
+                        "trace_boost": trace_boost,
+                        "recency_boost": rec_boost,
+                    },
+                    "features": {
+                        "classification": path_detail["classification"],
+                        "is_trace_file": is_trace,
+                        "git_age_hours": (
+                            round(git_hours, 1) if git_hours is not None else None
+                        ),
+                        "prefer_match": path_detail["prefer_match"],
+                        "avoid_match": path_detail["avoid_match"],
+                    },
+                }
+            )
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    # Attach composite score to each match for downstream use
+
     results = []
     for s, m in scored:
         m_copy = dict(m)
         m_copy["_rank_score"] = round(s, 2)
         results.append(m_copy)
+
+    if explain:
+        # Sort cards to match ranked order
+        cards.sort(key=lambda c: c["score_total"], reverse=True)
+        return results, cards
+
     return results
