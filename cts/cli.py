@@ -9,6 +9,9 @@ Usage:
   cts symbol <sym> --repo org/repo --format claude --bundle symbol
   cts index ctags --repo org/repo
   cts job (test|build|lint) --repo org/repo [--preset ...]
+  cts sidecar validate artifact.json
+  cts sidecar summarize artifact.json [--format markdown]
+  cts sidecar secrets-scan artifact.json [--fail]
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -17,8 +20,9 @@ Bundle modes: default | error | symbol | change  (requires --format claude|sidec
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from cts import __version__
 from cts import bundle as bundle_mod
@@ -446,6 +450,102 @@ def cmd_job(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sidecar subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_sidecar(args: argparse.Namespace) -> None:
+    from cts import sidecar as sidecar_mod
+
+    action = getattr(args, "sidecar_action", None)
+    if not action:
+        print("Error: sidecar requires a subcommand", file=sys.stderr)
+        raise SystemExit(1)
+
+    if action == "validate":
+        _sidecar_validate(args, sidecar_mod)
+    elif action == "summarize":
+        _sidecar_summarize(args, sidecar_mod)
+    elif action == "secrets-scan":
+        _sidecar_secrets_scan(args, sidecar_mod)
+
+
+def _sidecar_validate(args: argparse.Namespace, mod: Any) -> None:
+    try:
+        data = mod.load(args.file)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except FileNotFoundError:
+        print(f"Error: file not found: {args.file}", file=sys.stderr)
+        raise SystemExit(1)
+
+    errors = mod.validate_envelope(data)
+    warnings = mod.validate_stability_contract(data)
+
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+
+    if errors:
+        print(
+            f"FAIL: {len(errors)} error(s), {len(warnings)} warning(s)",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    print(f"OK: valid sidecar (schema v{data.get('bundle_schema_version')})")
+
+
+def _sidecar_summarize(args: argparse.Namespace, mod: Any) -> None:
+    try:
+        data = mod.load(args.file)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except FileNotFoundError:
+        print(f"Error: file not found: {args.file}", file=sys.stderr)
+        raise SystemExit(1)
+
+    fmt = getattr(args, "summary_format", "text")
+    print(mod.summarize(data, format=fmt))
+
+
+def _sidecar_secrets_scan(args: argparse.Namespace, mod: Any) -> None:
+    try:
+        data = mod.load(args.file)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except FileNotFoundError:
+        print(f"Error: file not found: {args.file}", file=sys.stderr)
+        raise SystemExit(1)
+
+    findings = mod.secrets_scan(data)
+
+    if not findings:
+        print("OK: no secrets detected")
+        return
+
+    report = getattr(args, "report", False)
+    if report:
+        for f in findings:
+            print(
+                f"  [{f['type']}] {f['location']}: {f['redacted']}",
+                file=sys.stderr,
+            )
+
+    print(
+        f"WARN: {len(findings)} potential secret(s) found",
+        file=sys.stderr,
+    )
+
+    if getattr(args, "fail", False):
+        raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -504,6 +604,47 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_common_args(p_job)
 
+    # sidecar
+    p_sidecar = sub.add_parser("sidecar", help="Sidecar artifact utilities")
+    sidecar_sub = p_sidecar.add_subparsers(
+        dest="sidecar_action", help="Sidecar subcommands"
+    )
+
+    # sidecar validate
+    p_sc_validate = sidecar_sub.add_parser("validate", help="Validate sidecar envelope")
+    p_sc_validate.add_argument("file", help="Path to sidecar JSON file")
+
+    # sidecar summarize
+    p_sc_summarize = sidecar_sub.add_parser(
+        "summarize", help="Print human-readable summary"
+    )
+    p_sc_summarize.add_argument("file", help="Path to sidecar JSON file")
+    p_sc_summarize.add_argument(
+        "--format",
+        dest="summary_format",
+        choices=["text", "markdown"],
+        default="text",
+        help="Summary output format (default: text)",
+    )
+
+    # sidecar secrets-scan
+    p_sc_secrets = sidecar_sub.add_parser(
+        "secrets-scan", help="Scan for potential secrets"
+    )
+    p_sc_secrets.add_argument("file", help="Path to sidecar JSON file")
+    p_sc_secrets.add_argument(
+        "--fail",
+        action="store_true",
+        default=False,
+        help="Exit nonzero if secrets detected",
+    )
+    p_sc_secrets.add_argument(
+        "--report",
+        action="store_true",
+        default=False,
+        help="Print findings with redacted previews",
+    )
+
     return parser
 
 
@@ -522,6 +663,7 @@ def main(argv: List[str] | None = None) -> None:
         "symbol": cmd_symbol,
         "index": cmd_index,
         "job": cmd_job,
+        "sidecar": cmd_sidecar,
     }
     fn = commands.get(args.command)
     if fn:
