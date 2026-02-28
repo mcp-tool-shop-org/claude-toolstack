@@ -561,9 +561,7 @@ def cmd_corpus(args: argparse.Namespace) -> None:
     if action == "ingest":
         _corpus_ingest(args)
     elif action == "report":
-        # Placeholder for Commit 2
-        print("Error: corpus report not yet implemented", file=sys.stderr)
-        raise SystemExit(1)
+        _corpus_report(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -656,6 +654,41 @@ def _corpus_ingest(args: argparse.Namespace) -> None:
         print(f"Skipped (date): {stats['skipped_date']}", file=sys.stderr)
     print(f"Missing debug: {stats['missing_debug']}", file=sys.stderr)
     print(f"Output:        {out_path} ({written} records)", file=sys.stderr)
+
+
+def _corpus_report(args: argparse.Namespace) -> None:
+    from cts.corpus.report import generate_report, load_corpus
+
+    corpus_file: str = args.corpus_file
+    fmt: str = getattr(args, "report_format", "markdown")
+    out_path: str | None = getattr(args, "out", None)
+    mode_filter: str | None = getattr(args, "mode", None)
+    repo_filter: str | None = getattr(args, "repo", None)
+    action_filter: str | None = getattr(args, "action", None)
+
+    try:
+        records = load_corpus(corpus_file)
+    except FileNotFoundError:
+        print(f"Error: file not found: {corpus_file}", file=sys.stderr)
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSONL — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    report = generate_report(
+        records,
+        format=fmt,
+        mode_filter=mode_filter,
+        repo_filter=repo_filter,
+        action_filter=action_filter,
+    )
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(report)
+        print(f"Report written to {out_path}", file=sys.stderr)
+    else:
+        print(report)
 
 
 # ---------------------------------------------------------------------------
@@ -800,8 +833,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also write pass-level JSONL (corpus_passes.jsonl)",
     )
 
-    # corpus report (placeholder for Commit 2)
-    corpus_sub.add_parser("report", help="Generate analytics report from corpus JSONL")
+    # corpus report
+    p_cr = corpus_sub.add_parser(
+        "report", help="Generate analytics report from corpus JSONL"
+    )
+    p_cr.add_argument("corpus_file", help="Path to corpus JSONL file")
+    p_cr.add_argument(
+        "--format",
+        dest="report_format",
+        choices=["text", "markdown", "json"],
+        default="markdown",
+        help="Report output format (default: markdown)",
+    )
+    p_cr.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write report to file (default: stdout)",
+    )
+    p_cr.add_argument(
+        "--mode",
+        default=None,
+        help="Filter to this mode (e.g. symbol, error)",
+    )
+    p_cr.add_argument(
+        "--repo",
+        default=None,
+        help="Filter to this repo (e.g. org/repo)",
+    )
+    p_cr.add_argument(
+        "--action",
+        default=None,
+        help="Filter to artifacts containing this action",
+    )
 
     return parser
 

@@ -8,6 +8,7 @@ for aggregate reporting and tuning analysis.
 from cts.corpus.extract import extract_passes, extract_record
 from cts.corpus.load import load_artifact
 from cts.corpus.model import CorpusRecord, PassRecord
+from cts.corpus.report import generate_report
 from cts.corpus.scan import scan_dir
 from cts.corpus.store import write_corpus, write_passes
 
@@ -18,6 +19,7 @@ __all__ = [
     "extract_passes",
     "write_corpus",
     "write_passes",
+    "generate_report",
     "CorpusRecord",
     "PassRecord",
 ]
