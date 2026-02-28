@@ -91,26 +91,76 @@ All endpoints require `x-api-key` header. Gateway binds to `127.0.0.1:8088` only
 | `POST` | `/v1/index/ctags` | Build ctags index (async) |
 | `POST` | `/v1/symbol/ctags` | Query symbol definitions |
 | `POST` | `/v1/run/job` | Run allowlisted test/build/lint |
+| `GET` | `/v1/metrics` | Prometheus-format counters |
 
-### Example: search
+All responses include `X-Request-ID` for end-to-end correlation. Clients can send their own via the `X-Request-ID` header.
+
+## CLI (`cts`)
+
+A zero-dependency Python CLI that wraps all gateway endpoints.
+
+### Install
 
 ```bash
+pip install -e .
+# or: pipx install -e .
+```
+
+### Configure
+
+```bash
+export CLAUDE_TOOLSTACK_API_KEY=<your-key>
+export CLAUDE_TOOLSTACK_URL=http://127.0.0.1:8088  # default
+```
+
+### Usage
+
+```bash
+# Gateway health
+cts status
+
+# Search (text output)
+cts search "PaymentService" --repo myorg/myrepo --max 50
+
+# Search (evidence bundle for Claude — auto-fetches context slices)
+cts search "PaymentService" --repo myorg/myrepo --format claude
+
+# File slice
+cts slice --repo myorg/myrepo src/main.ts:120-180
+
+# Symbol lookup
+cts symbol PaymentService --repo myorg/myrepo
+
+# Run tests
+cts job test --repo myorg/myrepo --preset node
+
+# All commands support: --format json|text|claude --request-id <id>
+```
+
+### Evidence Bundles (`--format claude`)
+
+The `--claude` output mode produces compact, paste-ready evidence packs:
+1. Runs the search
+2. Picks the top K distinct files from results
+3. Fetches context slices (±30 lines by default) for each
+4. Renders a single bundle with matches + inline code
+
+Tuning: `--evidence-files 5` (files to slice), `--context 30` (lines around hit).
+
+### curl examples
+
+```bash
+# Search
 curl -sS -H "x-api-key: $KEY" -H "content-type: application/json" \
   -d '{"repo":"myorg/myrepo","query":"PaymentService","max_matches":50}' \
   http://127.0.0.1:8088/v1/search/rg | jq
-```
 
-### Example: file slice
-
-```bash
+# File slice
 curl -sS -H "x-api-key: $KEY" -H "content-type: application/json" \
   -d '{"repo":"myorg/myrepo","path":"src/main.ts","start":120,"end":160}' \
   http://127.0.0.1:8088/v1/file/slice | jq
-```
 
-### Example: run tests
-
-```bash
+# Run tests
 curl -sS -H "x-api-key: $KEY" -H "content-type: application/json" \
   -d '{"repo":"myorg/myrepo","job":"test","preset":"node"}' \
   http://127.0.0.1:8088/v1/run/job | jq
@@ -171,10 +221,19 @@ OS + headroom: 10-14 GB always reserved for filesystem cache, desktop, SSH.
 claude-toolstack/
 ├── compose.yaml           # Docker Compose stack
 ├── .env.example           # Configuration template
+├── pyproject.toml         # CLI packaging (cts)
+├── repos.yaml             # Declarative repo registry
+├── cts/                   # CLI client (zero deps)
+│   ├── cli.py             # argparse commands
+│   ├── http.py            # gateway HTTP client
+│   ├── render.py          # json/text/claude renderers
+│   └── config.py          # env + defaults
 ├── gateway/
-│   ├── main.py            # FastAPI gateway (~500 lines)
+│   ├── main.py            # FastAPI gateway
 │   ├── Dockerfile         # python:3.12-slim + ripgrep + tini
-│   └── requirements.txt   # 4 dependencies
+│   └── requirements.txt   # 6 dependencies
+├── nginx/
+│   └── gateway.conf       # Reverse proxy (optional)
 ├── systemd/
 │   ├── claude-index.slice
 │   ├── claude-lsp.slice
@@ -188,7 +247,10 @@ claude-toolstack/
 ├── scripts/
 │   ├── bootstrap.sh       # Host setup (run once)
 │   ├── smoke-test.sh      # Validation suite
-│   └── health.sh          # Quick health check
+│   ├── health.sh          # Quick health check
+│   ├── add-repo.sh        # Repo onboarding
+│   ├── policy-lint.sh     # Security posture check
+│   └── triage.sh          # Diagnostics (--request-id)
 └── docs/
     └── tuning.md          # Slice tuning guide
 ```

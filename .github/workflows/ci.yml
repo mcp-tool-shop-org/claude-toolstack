@@ -4,11 +4,15 @@ on:
   push:
     paths:
       - 'gateway/**'
+      - 'cts/**'
+      - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
   pull_request:
     paths:
       - 'gateway/**'
+      - 'cts/**'
+      - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
   workflow_dispatch:
@@ -33,13 +37,19 @@ jobs:
           pip install ruff mypy types-PyYAML
 
       - name: Ruff lint
-        run: ruff check gateway/
+        run: ruff check gateway/ cts/
 
       - name: Ruff format check
-        run: ruff format --check gateway/
+        run: ruff format --check gateway/ cts/
 
       - name: Mypy type check
         run: mypy gateway/main.py --ignore-missing-imports --no-error-summary || true
+
+      - name: Verify CLI installs
+        run: |
+          pip install -e .
+          cts --version
+          cts --help
 
   container-build:
     runs-on: ubuntu-latest
@@ -90,6 +100,15 @@ jobs:
             http://127.0.0.1:8088/v1/metrics)
           echo "Metrics endpoint returned: $METRICS"
           [ "$METRICS" = "200" ] || exit 1
+
+          # Request-ID propagation
+          RID=$(curl -sS -D- -o /dev/null \
+            -H "x-api-key: ci-test-key" \
+            -H "X-Request-ID: ci-test-rid-001" \
+            http://127.0.0.1:8088/v1/status 2>&1 \
+            | grep -i 'x-request-id' | tr -d '\r')
+          echo "Request-ID header: $RID"
+          echo "$RID" | grep -q "ci-test-rid-001" || exit 1
 
       - name: Container logs
         if: failure()

@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
 # triage.sh — Quick diagnostic dump when something feels slow or wrong.
 #
-# Prints: PSI, top containers by memory, slice usage, last 50 audit events, metrics.
+# Usage:
+#   ./scripts/triage.sh                    # full triage
+#   ./scripts/triage.sh --request-id <id>  # filter audit by request ID
+#
+# Prints: PSI, top containers by memory, slice usage, audit events, metrics.
 set -euo pipefail
+
+REQUEST_ID=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --request-id)
+            REQUEST_ID="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: triage.sh [--request-id <id>]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 echo "=== Claude Toolstack Triage ==="
 echo "Time: $(date -Iseconds)"
+if [ -n "$REQUEST_ID" ]; then
+    echo "Filter: request_id=$REQUEST_ID"
+fi
 
 # ---------------------------------------------------------------
 # 1. PSI summaries
@@ -54,14 +76,12 @@ for slice in claude-index claude-lsp claude-build claude-vector; do
 done
 
 # ---------------------------------------------------------------
-# 4. Last 50 audit events
+# 4. Audit events (filterable by request ID)
 # ---------------------------------------------------------------
 echo ""
-echo "--- Last 50 Audit Events ---"
 
 # Try to find audit log in the gw-audit volume
 AUDIT_LOG=""
-# Check common locations
 for candidate in \
     "/var/lib/docker/volumes/claude-toolstack_gw-audit/_data/audit.jsonl" \
     "/audit/audit.jsonl"; do
@@ -72,23 +92,49 @@ for candidate in \
 done
 
 if [ -n "$AUDIT_LOG" ]; then
-    tail -50 "$AUDIT_LOG" | python3 -c "
+    if [ -n "$REQUEST_ID" ]; then
+        echo "--- Audit Events for request_id=$REQUEST_ID ---"
+        grep "$REQUEST_ID" "$AUDIT_LOG" 2>/dev/null | python3 -c "
 import sys, json
 for line in sys.stdin:
     try:
         e = json.loads(line.strip())
         ts = e.get('ts', '')
         typ = e.get('type', '?')
+        rid = e.get('request_id', '')
         if typ == 'http':
-            print(f\"  {ts:.0f}  HTTP {e.get('method','?'):6s} {e.get('path','?'):30s} → {e.get('status','?')}  ({e.get('duration_sec',0):.3f}s)\")
+            dur = e.get('duration_sec', 0)
+            print(f'  {ts:.0f}  HTTP {e.get(\"method\",\"?\"):6s} {e.get(\"path\",\"?\"):30s} -> {e.get(\"status\",\"?\")}  ({dur:.3f}s)  rid={rid}')
         elif typ == 'docker_exec':
-            print(f\"  {ts:.0f}  EXEC {e.get('container','?')}\")
+            print(f'  {ts:.0f}  EXEC {e.get(\"container\",\"?\")}  rid={rid}')
         elif typ == 'docker_exec_result':
-            print(f\"  {ts:.0f}  EXEC → exit={e.get('exit_code','?')}\")
+            print(f'  {ts:.0f}  EXEC -> exit={e.get(\"exit_code\",\"?\")}  rid={rid}')
+    except:
+        pass
+" 2>/dev/null || grep "$REQUEST_ID" "$AUDIT_LOG"
+    else
+        echo "--- Last 50 Audit Events ---"
+        tail -50 "$AUDIT_LOG" | python3 -c "
+import sys, json
+for line in sys.stdin:
+    try:
+        e = json.loads(line.strip())
+        ts = e.get('ts', '')
+        typ = e.get('type', '?')
+        rid = e.get('request_id', '')[:8] if e.get('request_id') else ''
+        if typ == 'http':
+            dur = e.get('duration_sec', 0)
+            print(f'  {ts:.0f}  HTTP {e.get(\"method\",\"?\"):6s} {e.get(\"path\",\"?\"):30s} -> {e.get(\"status\",\"?\")}  ({dur:.3f}s)  rid={rid}...')
+        elif typ == 'docker_exec':
+            print(f'  {ts:.0f}  EXEC {e.get(\"container\",\"?\")}  rid={rid}...')
+        elif typ == 'docker_exec_result':
+            print(f'  {ts:.0f}  EXEC -> exit={e.get(\"exit_code\",\"?\")}  rid={rid}...')
     except:
         pass
 " 2>/dev/null || tail -50 "$AUDIT_LOG"
+    fi
 else
+    echo "--- Audit Events ---"
     echo "  Audit log not found. Check AUDIT_LOG_PATH or docker volume."
 fi
 
