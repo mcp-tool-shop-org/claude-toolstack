@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -142,8 +143,10 @@ _audit_handler.setFormatter(logging.Formatter("%(message)s"))
 audit_logger.addHandler(_audit_handler)
 
 
-def audit(event: Dict[str, Any]) -> None:
+def audit(event: Dict[str, Any], request_id: str = "") -> None:
     event.setdefault("ts", time.time())
+    if request_id:
+        event["request_id"] = request_id
     audit_logger.info(json.dumps(event, ensure_ascii=False))
 
 
@@ -260,7 +263,7 @@ async def _rate_limit_redis(api_key: str, client_ip: str) -> None:
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Claude Tooling Gateway", version="0.1.0")
+app = FastAPI(title="Claude Tooling Gateway", version="0.2.0")
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +477,7 @@ async def _run_subprocess(cmd: List[str], timeout: float) -> str:
 
 
 async def _docker_exec(
-    container_name: str, cmd: List[str], timeout: int
+    container_name: str, cmd: List[str], timeout: int, request_id: str = ""
 ) -> Tuple[int, str, str]:
     _metrics["docker_exec_total"] += 1
     audit(
@@ -483,7 +486,8 @@ async def _docker_exec(
             "container": container_name,
             "cmd": cmd,
             "timeout_sec": timeout,
-        }
+        },
+        request_id=request_id,
     )
 
     client = _get_docker_client()
@@ -530,19 +534,45 @@ async def _docker_exec(
             "exit_code": rc,
             "stdout_len": len(out),
             "stderr_len": len(err),
-        }
+        },
+        request_id=request_id,
     )
     return rc, out, err
 
 
 # ---------------------------------------------------------------------------
-# Middleware: auth + rate limit + audit
+# Request ID helpers
+# ---------------------------------------------------------------------------
+
+_REQUEST_ID_RE = re.compile(r"^[\x20-\x7E]{1,128}$")
+
+
+def _resolve_request_id(request: Request) -> str:
+    """Accept client-provided X-Request-ID or generate a UUIDv4."""
+    incoming = request.headers.get("x-request-id", "").strip()
+    if incoming and _REQUEST_ID_RE.match(incoming):
+        return incoming
+    return str(uuid.uuid4())
+
+
+def _get_request_id(request: Request) -> str:
+    """Retrieve the request ID stored during middleware processing."""
+    return getattr(request.state, "request_id", "")
+
+
+# ---------------------------------------------------------------------------
+# Middleware: request-id + auth + rate limit + audit
 # ---------------------------------------------------------------------------
 
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     start = time.time()
+
+    # Resolve request ID (accept or generate)
+    request_id = _resolve_request_id(request)
+    request.state.request_id = request_id
+
     x_api_key = request.headers.get("x-api-key", "")
     client_ip = request.client.host if request.client else "unknown"
     key_hash = (
@@ -571,9 +601,12 @@ async def security_middleware(request: Request, call_next):
                 "path": request.url.path,
                 "status": e.status_code,
                 "duration_sec": round(time.time() - start, 4),
-            }
+            },
+            request_id=request_id,
         )
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        resp = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        resp.headers["X-Request-ID"] = request_id
+        return resp
 
     # Forward
     response = await call_next(request)
@@ -589,8 +622,10 @@ async def security_middleware(request: Request, call_next):
             "path": request.url.path,
             "status": response.status_code,
             "duration_sec": duration,
-        }
+        },
+        request_id=request_id,
     )
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
@@ -603,7 +638,7 @@ async def security_middleware(request: Request, call_next):
 def status():
     return {
         "ok": True,
-        "version": "0.1.0",
+        "version": "0.2.0",
         "repo_root": str(REPO_ROOT),
         "cache_root": str(CACHE_ROOT),
         "rg_threads": RG_THREADS,
@@ -744,7 +779,7 @@ async def file_slice(req: FileSliceRequest):
 
 
 @app.post("/v1/index/ctags")
-async def ctags_index(req: CtagsIndexRequest):
+async def ctags_index(req: CtagsIndexRequest, request: Request):
     repo_id, repo_norm = _normalize_repo(req.repo)
     _enforce_repo_allowlist(repo_id)
     _resolve_repo_path(repo_id)  # validate path exists
@@ -769,9 +804,12 @@ async def ctags_index(req: CtagsIndexRequest):
         ),
     ]
 
+    rid = _get_request_id(request)
     async with job_sem:
         started = time.time()
-        rc, out, err = await _docker_exec(container_name, exec_cmd, timeout=600)
+        rc, out, err = await _docker_exec(
+            container_name, exec_cmd, timeout=600, request_id=rid
+        )
         dur = round(time.time() - started, 3)
 
     stdout_b, _ = _truncate_bytes(out.encode("utf-8", errors="ignore"))
@@ -843,7 +881,7 @@ async def ctags_query(req: CtagsQueryRequest):
 
 
 @app.post("/v1/run/job")
-async def run_job(req: RunJobRequest):
+async def run_job(req: RunJobRequest, request: Request):
     repo_id, _ = _normalize_repo(req.repo)
     _enforce_repo_allowlist(repo_id)
     _resolve_repo_path(repo_id)
@@ -1005,9 +1043,12 @@ async def run_job(req: RunJobRequest):
     cmd = [c.replace("$CWD", _sh_quote(spec["cwd"])) for c in spec["commands"][job]]
     timeout = int(spec.get("timeout", 900))
 
+    rid = _get_request_id(request)
     async with job_sem:
         started = time.time()
-        rc, out, err = await _docker_exec(container_name, cmd, timeout=timeout)
+        rc, out, err = await _docker_exec(
+            container_name, cmd, timeout=timeout, request_id=rid
+        )
         dur = round(time.time() - started, 3)
 
     stdout_b, out_trunc = _truncate_bytes(out.encode("utf-8", errors="ignore"))
