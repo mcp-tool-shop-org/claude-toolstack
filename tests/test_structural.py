@@ -191,6 +191,65 @@ class TestGenericFallback(unittest.TestCase):
         self.assertFalse(r["is_probable_definition"])
 
 
+class TestCallSiteDetection(unittest.TestCase):
+    def test_function_call(self):
+        r = classify_snippet("app.py", "login", "    result = login(user)")
+        self.assertFalse(r["is_probable_definition"])
+        self.assertTrue(r["is_probable_call_site"])
+        self.assertGreater(r["call_conf"], 0.0)
+
+    def test_method_call(self):
+        r = classify_snippet("app.py", "login", "    auth.login(user)")
+        self.assertTrue(r["is_probable_call_site"])
+
+    def test_constructor_call(self):
+        snippet = "    const user = new User(data)"
+        r = classify_snippet("app.ts", "User", snippet)
+        self.assertTrue(r["is_probable_call_site"])
+        self.assertGreaterEqual(r["call_conf"], 0.8)
+
+    def test_rust_path_access(self):
+        r = classify_snippet("main.rs", "Config", "    Config::new()")
+        self.assertTrue(r["is_probable_call_site"])
+
+    def test_comment_not_call_site(self):
+        r = classify_snippet("app.py", "login", "# login is deprecated")
+        self.assertFalse(r["is_probable_call_site"])
+
+    def test_import_not_call_site(self):
+        snippet = "from auth import login"
+        r = classify_snippet("app.py", "login", snippet)
+        self.assertFalse(r["is_probable_call_site"])
+
+    def test_js_import_not_call_site(self):
+        snippet = "import { User } from './model'"
+        r = classify_snippet("app.ts", "User", snippet)
+        self.assertFalse(r["is_probable_call_site"])
+
+    def test_definition_suppresses_call(self):
+        """If snippet IS a def, call_site should be False."""
+        r = classify_snippet("auth.py", "login", "def login(user):")
+        self.assertTrue(r["is_probable_definition"])
+        self.assertFalse(r["is_probable_call_site"])
+        self.assertEqual(r["call_conf"], 0.0)
+
+    def test_multiline_call(self):
+        text = """import os
+
+    result = process(data)
+    print(result)
+"""
+        r = classify_snippet("app.py", "process", text)
+        self.assertTrue(r["is_probable_call_site"])
+
+    def test_empty_result_includes_call_fields(self):
+        r = classify_snippet("foo.py", "bar", "")
+        self.assertIn("is_probable_call_site", r)
+        self.assertIn("call_conf", r)
+        self.assertFalse(r["is_probable_call_site"])
+        self.assertEqual(r["call_conf"], 0.0)
+
+
 class TestEdgeCases(unittest.TestCase):
     def test_empty_text(self):
         r = classify_snippet("foo.py", "bar", "")

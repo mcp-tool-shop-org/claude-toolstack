@@ -324,14 +324,17 @@ def rank_matches(
             ctags_def_boost = 0.8
             ctags_kind_boost = ctags_kind_w
 
-        # Structural heuristics (snippet-based def/export detection)
+        # Structural heuristics (snippet-based def/export/call detection)
         def_likeness_boost = 0.0
         export_boost = 0.0
+        caller_proximity_boost = 0.0
         struct_rule = ""
         struct_def_conf = 0.0
         struct_export_conf = 0.0
+        struct_call_conf = 0.0
         is_prob_def = False
         is_prob_export = False
+        is_prob_call = False
         if query_symbol:
             snippet = m.get("snippet", "")
             if snippet:
@@ -340,11 +343,14 @@ def rank_matches(
                 sc = classify_snippet(path, query_symbol, snippet)
                 struct_def_conf = sc["def_conf"]
                 struct_export_conf = sc["export_conf"]
+                struct_call_conf = sc["call_conf"]
                 is_prob_def = sc["is_probable_definition"]
                 is_prob_export = sc["is_probable_export"]
+                is_prob_call = sc["is_probable_call_site"]
                 struct_rule = sc["matched_rule"]
                 def_likeness_boost = round(0.5 * struct_def_conf, 2)
                 export_boost = round(0.3 * struct_export_conf, 2)
+                caller_proximity_boost = round(0.2 * struct_call_conf, 2)
 
         total = (
             path_total
@@ -354,6 +360,7 @@ def rank_matches(
             + ctags_kind_boost
             + def_likeness_boost
             + export_boost
+            + caller_proximity_boost
         )
         scored.append((total, m))
 
@@ -373,6 +380,7 @@ def rank_matches(
                         "ctags_kind_boost": ctags_kind_boost,
                         "def_likeness_boost": def_likeness_boost,
                         "export_boost": export_boost,
+                        "caller_proximity_boost": caller_proximity_boost,
                     },
                     "features": {
                         "classification": path_detail["classification"],
@@ -381,9 +389,11 @@ def rank_matches(
                         "ctags_best_kind": ctags_best_kind,
                         "is_prob_def": is_prob_def,
                         "is_prob_export": is_prob_export,
+                        "is_prob_call": is_prob_call,
                         "struct_rule": struct_rule,
                         "struct_def_conf": struct_def_conf,
                         "struct_export_conf": struct_export_conf,
+                        "struct_call_conf": struct_call_conf,
                         "git_age_hours": (
                             round(git_hours, 1) if git_hours is not None else None
                         ),

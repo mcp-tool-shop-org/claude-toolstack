@@ -239,6 +239,7 @@ class TestRankMatchesExplain(unittest.TestCase):
             "ctags_kind_boost",
             "def_likeness_boost",
             "export_boost",
+            "caller_proximity_boost",
         ]:
             self.assertIn(key, signals)
         # Feature keys
@@ -250,9 +251,11 @@ class TestRankMatchesExplain(unittest.TestCase):
             "ctags_best_kind",
             "is_prob_def",
             "is_prob_export",
+            "is_prob_call",
             "struct_rule",
             "struct_def_conf",
             "struct_export_conf",
+            "struct_call_conf",
             "git_age_hours",
             "prefer_match",
             "avoid_match",
@@ -481,6 +484,54 @@ class TestStructuralRankingSignals(unittest.TestCase):
         matches = [{"path": "src/auth.py", "line": 10}]
         ranked = rank_matches(matches, query_symbol="login")
         self.assertEqual(len(ranked), 1)
+
+    def test_call_site_outranks_comment(self):
+        """A call site should rank above a mere comment mention."""
+        matches = [
+            {
+                "path": "src/docs.py",
+                "line": 5,
+                "snippet": "# login is deprecated",
+            },
+            {
+                "path": "src/handler.py",
+                "line": 10,
+                "snippet": "    result = login(user)",
+            },
+        ]
+        ranked = rank_matches(matches, query_symbol="login")
+        self.assertEqual(ranked[0]["path"], "src/handler.py")
+
+    def test_def_outranks_call_site(self):
+        """A definition should still rank above a call site."""
+        matches = [
+            {
+                "path": "src/handler.py",
+                "line": 10,
+                "snippet": "    result = login(user)",
+            },
+            {
+                "path": "src/auth.py",
+                "line": 1,
+                "snippet": "def login(user):",
+            },
+        ]
+        ranked = rank_matches(matches, query_symbol="login")
+        self.assertEqual(ranked[0]["path"], "src/auth.py")
+
+    def test_caller_proximity_in_explain(self):
+        """Score cards should show caller proximity signal."""
+        matches = [
+            {
+                "path": "src/handler.py",
+                "line": 10,
+                "snippet": "    result = login(user)",
+            },
+        ]
+        _, cards = rank_matches(matches, query_symbol="login", explain=True)
+        card = cards[0]
+        self.assertGreater(card["signals"]["caller_proximity_boost"], 0.0)
+        self.assertTrue(card["features"]["is_prob_call"])
 
 
 if __name__ == "__main__":

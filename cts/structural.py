@@ -158,6 +158,26 @@ _FAMILY_RULES = {
     "generic": _RULES_GENERIC,
 }
 
+# ---------------------------------------------------------------------------
+# Call-site detection (language-agnostic)
+# ---------------------------------------------------------------------------
+
+# Lines that are comments or imports — skip for call-site detection
+_NOISE_LINE_RE = re.compile(
+    r"^\s*(?:#|//|/\*|\*|--|import\b|from\b.*import\b|require\s*\()"
+)
+
+# Patterns that suggest call/usage (not definition).
+# Checked only when is_probable_definition is False.
+_CALL_PATTERNS = [
+    # Function/method call: symbol( or .symbol(
+    (r"(?:^|[.\s(,=!&|+\-*/]){SYM}\s*\(", 0.7, "call_invocation"),
+    # Constructor: new Symbol(
+    (r"\bnew\s+{SYM}\s*\(", 0.8, "call_constructor"),
+    # Rust/C++ path usage: Symbol:: or symbol::
+    (r"\b{SYM}::", 0.6, "call_path_access"),
+]
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -170,7 +190,7 @@ def classify_snippet(
     text: str,
     lang_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Classify whether snippet text likely defines or exports a symbol.
+    """Classify whether snippet text defines, exports, or calls a symbol.
 
     Args:
         path: File path (used for language detection if lang_hint is None).
@@ -181,8 +201,10 @@ def classify_snippet(
     Returns dict with:
         is_probable_definition: bool
         is_probable_export: bool
+        is_probable_call_site: bool
         def_conf: float (0..1)
         export_conf: float (0..1)
+        call_conf: float (0..1)
         matched_rule: str (rule name that fired, or "")
         lang_family: str
     """
@@ -215,22 +237,69 @@ def classify_snippet(
         except re.error:
             continue
 
+    # Call-site detection: only when NOT a definition
+    is_call = False
+    call_conf = 0.0
+    if not is_def:
+        is_call, call_conf = _detect_call_site(escaped, text)
+        if is_call and not best_rule:
+            best_rule = "call_site"
+
     return {
         "is_probable_definition": is_def,
         "is_probable_export": is_export,
+        "is_probable_call_site": is_call,
         "def_conf": best_def_conf,
         "export_conf": best_export_conf,
+        "call_conf": call_conf,
         "matched_rule": best_rule,
         "lang_family": family,
     }
+
+
+def _detect_call_site(escaped_symbol: str, text: str) -> tuple:
+    """Detect if text contains a call/usage of the symbol.
+
+    Only called when the snippet is NOT a probable definition.
+    Filters out noise lines (comments, imports) before matching.
+
+    Returns (is_call: bool, confidence: float).
+    """
+    # Filter to non-noise lines containing the symbol
+    sym_re = re.compile(r"\b" + escaped_symbol + r"\b")
+    relevant_lines = []
+    for line in text.splitlines():
+        if _NOISE_LINE_RE.match(line):
+            continue
+        if sym_re.search(line):
+            relevant_lines.append(line)
+
+    if not relevant_lines:
+        return (False, 0.0)
+
+    # Check call patterns against relevant lines
+    joined = "\n".join(relevant_lines)
+    best_conf = 0.0
+    for template, conf, _name in _CALL_PATTERNS:
+        pattern = template.replace("{SYM}", escaped_symbol)
+        try:
+            if re.search(pattern, joined, re.MULTILINE):
+                if conf > best_conf:
+                    best_conf = conf
+        except re.error:
+            continue
+
+    return (best_conf > 0.0, best_conf)
 
 
 def _empty_result(family: str) -> Dict[str, Any]:
     return {
         "is_probable_definition": False,
         "is_probable_export": False,
+        "is_probable_call_site": False,
         "def_conf": 0.0,
         "export_conf": 0.0,
+        "call_conf": 0.0,
         "matched_rule": "",
         "lang_family": family,
     }
