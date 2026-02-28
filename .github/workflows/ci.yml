@@ -145,6 +145,12 @@ jobs:
       - name: Summarize artifact
         run: cts sidecar summarize ci-artifact.json --format markdown
 
+      - name: Post PR comment with summary
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/pr_comment_sidecar.py ci-artifact.json
+
       - name: Upload sidecar artifact
         if: always()
         uses: actions/upload-artifact@v4
