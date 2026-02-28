@@ -1,8 +1,9 @@
-"""Output renderers: --json, --text, --claude."""
+"""Output renderers: --json, --text, --claude (v1 + v2 bundles)."""
 
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List
 
 
@@ -206,5 +207,122 @@ def render_claude_job(data: Dict[str, Any]) -> None:
 
     if data.get("truncated"):
         lines.append("[output truncated at 512 KB]")
+
+    print("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# v2 structured bundle renderer
+# ---------------------------------------------------------------------------
+
+
+def render_bundle(bundle: Dict[str, Any]) -> None:
+    """Render a v2 structured evidence bundle."""
+    lines: List[str] = []
+
+    mode = bundle.get("mode", "default")
+    repo = bundle.get("repo", "?")
+    rid = bundle.get("request_id", "")
+    query = bundle.get("query", "")
+    ts = bundle.get("timestamp", 0)
+    ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+    # Header
+    lines.append("# Evidence Bundle")
+    lines.append("")
+
+    # Metadata
+    lines.append("## Metadata")
+    lines.append(f"  repo: {repo}")
+    lines.append(f"  mode: {mode}")
+    lines.append(f"  request_id: {rid}")
+    lines.append(f"  timestamp: {ts_str}")
+    if bundle.get("truncated"):
+        lines.append("  [search results truncated at 512 KB]")
+    lines.append("")
+
+    # Query
+    if query:
+        lines.append("## Query")
+        lines.append(f"  {query}")
+        lines.append("")
+
+    # Ranked evidence sources
+    sources = bundle.get("ranked_sources", [])
+    if sources:
+        lines.append(f"## Ranked Evidence Sources ({len(sources)})")
+        for s in sources:
+            path = s.get("path", "?")
+            line = s.get("line", 0)
+            score = s.get("score", 0.0)
+            extra = ""
+            if s.get("in_trace"):
+                extra = "  [trace]"
+            lines.append(f"  {score:+.2f}  {path}:{line}{extra}")
+        lines.append("")
+
+    # Top matches
+    matches = bundle.get("matches", [])
+    if matches:
+        lines.append(f"## Top Matches ({len(matches)})")
+        for m in matches:
+            path = m.get("path", "?")
+            line = m.get("line", 0)
+            snippet = m.get("snippet", "")
+            lines.append(f"  {path}:{line}  {snippet}")
+        lines.append("")
+
+    # File slices
+    slices = bundle.get("slices", [])
+    if slices:
+        lines.append(f"## File Slices ({len(slices)})")
+        for s in slices:
+            spath = s.get("path", "?")
+            srepo = s.get("repo", repo)
+            sstart = s.get("start", 0)
+            lines.append(f"--- {srepo}/{spath} (from line {sstart}) ---")
+            for i, sl in enumerate(s.get("lines", []), start=int(sstart)):
+                lines.append(f"{i:>6}  {sl}")
+            lines.append("")
+
+    # Symbols (symbol mode)
+    symbols = bundle.get("symbols", [])
+    if symbols:
+        lines.append(f"## Symbols ({len(symbols)})")
+        for sym in symbols:
+            kind = sym.get("kind", "?")
+            name = sym.get("name", "?")
+            fpath = sym.get("file", "?")
+            lines.append(f"  [{kind}] {name}  {fpath}")
+        lines.append("")
+
+    # Diff (change mode)
+    diff = bundle.get("diff", "")
+    if diff:
+        lines.append("## Diff")
+        # Trim to reasonable size
+        diff_lines = diff.splitlines()
+        if len(diff_lines) > 200:
+            lines.append(f"(showing last 200 of {len(diff_lines)} lines)")
+            lines.extend(diff_lines[-200:])
+        else:
+            lines.extend(diff_lines)
+        lines.append("")
+
+    # Suggested next commands
+    cmds = bundle.get("suggested_commands", [])
+    if cmds:
+        lines.append("## Suggested Next Commands")
+        for c in cmds:
+            lines.append(f"  {c}")
+        lines.append("")
+
+    # Notes
+    notes = bundle.get("notes", [])
+    if notes:
+        lines.append("## Notes")
+        for n in notes:
+            lines.append(f"  {n}")
+        lines.append("")
 
     print("\n".join(lines))

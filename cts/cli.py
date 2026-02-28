@@ -3,13 +3,14 @@
 Usage:
   cts status
   cts search <query> --repo org/repo [--glob ...] [--max N]
+  cts search <query> --repo org/repo --format claude --bundle error
   cts slice --repo org/repo <path>:<start>-<end>
-  cts symbol <sym> --repo org/repo
+  cts symbol <sym> --repo org/repo --format claude --bundle symbol
   cts index ctags --repo org/repo
   cts job (test|build|lint) --repo org/repo [--preset ...]
-  cts triage [--request-id <id>]
 
 Output modes: --json | --text (default) | --claude
+Bundle modes: default | error | symbol | change  (requires --format claude)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import sys
 from typing import List, Optional
 
 from cts import __version__
+from cts import bundle as bundle_mod
 from cts import http
 from cts import render
 
@@ -42,6 +44,43 @@ def _add_repo_arg(parser: argparse.ArgumentParser, required: bool = True) -> Non
         "--repo",
         required=required,
         help="Repository identifier (org/repo)",
+    )
+
+
+def _add_bundle_args(parser: argparse.ArgumentParser) -> None:
+    """Add --bundle and related evidence flags to a subparser."""
+    parser.add_argument(
+        "--bundle",
+        choices=["default", "error", "symbol", "change"],
+        default="default",
+        help="Bundle mode for --format claude (default: default)",
+    )
+    parser.add_argument(
+        "--evidence-files",
+        type=int,
+        default=5,
+        help="Files to include slices for in --claude mode (default 5)",
+    )
+    parser.add_argument(
+        "--context",
+        type=int,
+        default=30,
+        help="Lines of context around matches in --claude mode (default 30)",
+    )
+    parser.add_argument(
+        "--error-text",
+        default="",
+        help="Error/stack trace text for --bundle error mode",
+    )
+    parser.add_argument(
+        "--prefer-paths",
+        default=None,
+        help="Comma-separated path segments to boost (e.g. src,core)",
+    )
+    parser.add_argument(
+        "--avoid-paths",
+        default=None,
+        help="Comma-separated path segments to demote (e.g. vendor,test)",
     )
 
 
@@ -74,64 +113,43 @@ def cmd_search(args: argparse.Namespace) -> None:
         return
 
     if args.format == "claude":
-        # Evidence bundle: also fetch slices for top K matches
-        slices = _fetch_evidence_slices(
-            data,
-            repo=args.repo,
-            request_id=data.get("_request_id"),
-            max_files=args.evidence_files,
-            context=args.context,
-        )
-        render.render_claude_search(data, slices=slices)
+        mode = getattr(args, "bundle", "default")
+        prefer = _parse_csv(getattr(args, "prefer_paths", None))
+        avoid = _parse_csv(getattr(args, "avoid_paths", None))
+
+        if mode == "error":
+            error_text = getattr(args, "error_text", "") or ""
+            b = bundle_mod.build_error_bundle(
+                data,
+                repo=args.repo,
+                error_text=error_text,
+                request_id=data.get("_request_id"),
+                max_files=args.evidence_files,
+                context=args.context,
+                prefer_paths=prefer,
+                avoid_paths=avoid,
+            )
+        else:
+            b = bundle_mod.build_default_bundle(
+                data,
+                repo=args.repo,
+                request_id=data.get("_request_id"),
+                max_files=args.evidence_files,
+                context=args.context,
+                prefer_paths=prefer,
+                avoid_paths=avoid,
+            )
+        render.render_bundle(b)
         return
 
     render.render_text_search(data)
 
 
-def _fetch_evidence_slices(
-    search_data: dict,
-    repo: str,
-    request_id: Optional[str] = None,
-    max_files: int = 5,
-    context: int = 30,
-) -> List[dict]:
-    """For --claude mode: fetch file slices around the top K distinct matches."""
-    matches = search_data.get("matches", [])
-    if not matches:
-        return []
-
-    # De-duplicate by file path, keep first occurrence
-    seen_files: dict = {}
-    for m in matches:
-        path = m.get("path", "")
-        if path and path not in seen_files:
-            seen_files[path] = m
-        if len(seen_files) >= max_files:
-            break
-
-    slices = []
-    for path, m in seen_files.items():
-        line_no = m.get("line", 1)
-        start = max(1, line_no - context)
-        end = line_no + context
-
-        # Skip files with very long average line lengths (likely minified)
-        try:
-            s = http.post(
-                "/v1/file/slice",
-                {"repo": repo, "path": path, "start": start, "end": end},
-                request_id=request_id,
-            )
-            file_lines = s.get("lines", [])
-            if file_lines:
-                avg_len = sum(len(ln) for ln in file_lines) / len(file_lines)
-                if avg_len > 500:
-                    continue  # skip minified
-            slices.append(s)
-        except SystemExit:
-            continue  # skip on error, don't abort the whole bundle
-
-    return slices
+def _parse_csv(val: Optional[str]) -> Optional[List[str]]:
+    """Split comma-separated value into list, or None."""
+    if not val:
+        return None
+    return [v.strip() for v in val.split(",") if v.strip()]
 
 
 def cmd_slice(args: argparse.Namespace) -> None:
@@ -168,8 +186,38 @@ def cmd_symbol(args: argparse.Namespace) -> None:
 
     if args.format == "json":
         render.render_json(data)
-    else:
-        render.render_text_symbol(data)
+        return
+
+    if args.format == "claude":
+        # Symbol bundle: defs + call site search
+        search_data = None
+        if getattr(args, "bundle", "default") == "symbol":
+            try:
+                search_data = http.post(
+                    "/v1/search/rg",
+                    {
+                        "repo": args.repo,
+                        "query": args.symbol,
+                        "max_matches": 30,
+                    },
+                    request_id=args.request_id,
+                )
+            except SystemExit:
+                pass  # search is optional enrichment
+
+        b = bundle_mod.build_symbol_bundle(
+            data,
+            search_data=search_data,
+            repo=args.repo,
+            symbol=args.symbol,
+            request_id=data.get("_request_id"),
+            max_files=getattr(args, "evidence_files", 5),
+            context=getattr(args, "context", 30),
+        )
+        render.render_bundle(b)
+        return
+
+    render.render_text_symbol(data)
 
 
 def cmd_index(args: argparse.Namespace) -> None:
@@ -227,18 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--max", type=int, default=50, help="Max matches (default 50)"
     )
-    p_search.add_argument(
-        "--evidence-files",
-        type=int,
-        default=5,
-        help="Number of files to include slices for in --claude mode (default 5)",
-    )
-    p_search.add_argument(
-        "--context",
-        type=int,
-        default=30,
-        help="Lines of context around each match in --claude mode (default 30)",
-    )
+    _add_bundle_args(p_search)
     _add_common_args(p_search)
 
     # slice
@@ -251,6 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_symbol = sub.add_parser("symbol", help="Query symbol definitions")
     p_symbol.add_argument("symbol", help="Symbol name to look up")
     _add_repo_arg(p_symbol)
+    _add_bundle_args(p_symbol)
     _add_common_args(p_symbol)
 
     # index
