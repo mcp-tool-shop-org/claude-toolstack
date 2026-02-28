@@ -302,8 +302,11 @@ class RunJobRequest(BaseModel):
     job: str = Field(..., description="One of: test, build, lint")
     preset: str = Field(
         "",
-        description="Preset: node, pnpm, yarn, python, rust, go, java, dotnet, bazel, cmake. "
-        "If empty, looks up default in repos.yaml.",
+        description=(
+            "Preset: node, pnpm, yarn, python, rust, go, "
+            "java, dotnet, bazel, cmake. "
+            "If empty, looks up default in repos.yaml."
+        ),
     )
     args: Optional[List[str]] = None
 
@@ -965,17 +968,21 @@ async def run_job(req: RunJobRequest, request: Request):
                 "test": [
                     "sh",
                     "-c",
-                    "cd $CWD && ./gradlew test --no-daemon -q 2>/dev/null || mvn test -q",
+                    "cd $CWD && ./gradlew test --no-daemon -q "
+                    "2>/dev/null || mvn test -q",
                 ],
                 "build": [
                     "sh",
                     "-c",
-                    "cd $CWD && ./gradlew build --no-daemon -q 2>/dev/null || mvn package -q",
+                    "cd $CWD && ./gradlew build --no-daemon -q "
+                    "2>/dev/null || mvn package -q",
                 ],
                 "lint": [
                     "sh",
                     "-c",
-                    "cd $CWD && ./gradlew spotlessCheck --no-daemon -q 2>/dev/null || mvn checkstyle:check -q",
+                    "cd $CWD && ./gradlew spotlessCheck "
+                    "--no-daemon -q 2>/dev/null "
+                    "|| mvn checkstyle:check -q",
                 ],
             },
             "timeout": 1200,
@@ -1012,7 +1019,9 @@ async def run_job(req: RunJobRequest, request: Request):
                 "build": [
                     "sh",
                     "-c",
-                    "cd $CWD && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build",
+                    "cd $CWD && cmake -B build "
+                    "-DCMAKE_BUILD_TYPE=Release "
+                    "&& cmake --build build",
                 ],
                 "lint": ["sh", "-c", "cd $CWD && cmake-lint CMakeLists.txt"],
             },
