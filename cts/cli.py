@@ -19,6 +19,7 @@ Usage:
   cts corpus rollback rollback.json
   cts corpus evaluate before.jsonl after.jsonl --format markdown
   cts corpus experiment init --id EXP1 --description "..." --out experiment.json
+  cts corpus experiment propose --corpus tuning.json --repos-yaml repos.yaml
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -977,6 +978,8 @@ def _corpus_experiment(args: argparse.Namespace) -> None:
 
     if exp_action == "init":
         _experiment_init(args)
+    elif exp_action == "propose":
+        _experiment_propose(args)
 
 
 def _experiment_init(args: argparse.Namespace) -> None:
@@ -1011,6 +1014,101 @@ def _experiment_init(args: argparse.Namespace) -> None:
         f"Experiment: {out_path} (id={envelope.id}, {n} variant(s))",
         file=sys.stderr,
     )
+
+
+def _experiment_propose(args: argparse.Namespace) -> None:
+    from cts.corpus.experiment_schema import create_experiment
+    from cts.corpus.patch import load_repos_yaml, load_tuning
+    from cts.corpus.variants import propose_experiment
+
+    corpus_path: str = args.corpus
+    repos_yaml_path: str = args.repos_yaml
+    experiment_path: str | None = getattr(args, "experiment", None)
+    out_dir: str = getattr(args, "out_dir", ".")
+    strategies_raw: list | None = getattr(args, "strategy", None)
+
+    # Load tuning (from corpus report --emit-tuning output)
+    try:
+        tuning = load_tuning(corpus_path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {corpus_path}", file=sys.stderr)
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    # Load repos.yaml
+    try:
+        repos_yaml = load_repos_yaml(repos_yaml_path)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {repos_yaml_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # Load or create experiment envelope
+    if experiment_path:
+        try:
+            with open(experiment_path, encoding="utf-8") as f:
+                exp_data = json.load(f)
+        except FileNotFoundError:
+            print(
+                f"Error: file not found: {experiment_path}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        except json.JSONDecodeError as exc:
+            print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+            raise SystemExit(1)
+
+        from cts.corpus.experiment_schema import (
+            ExperimentEnvelope,
+            VariantSpec,
+        )
+
+        variants = [
+            VariantSpec(name=v.get("name", f"V{i}"))
+            for i, v in enumerate(exp_data.get("variants", []))
+        ]
+        experiment = ExperimentEnvelope(
+            id=exp_data.get("id", ""),
+            description=exp_data.get("description", ""),
+            hypothesis=exp_data.get("hypothesis", ""),
+            variants=variants,
+        )
+    else:
+        experiment = create_experiment()
+
+    # Parse strategy overrides (e.g. "A=aggressive")
+    strategies = None
+    if strategies_raw:
+        strategies = {}
+        for s in strategies_raw:
+            if "=" in s:
+                vname, sname = s.split("=", 1)
+                strategies[vname.strip()] = sname.strip()
+
+    summary = propose_experiment(
+        tuning,
+        experiment,
+        repos_yaml,
+        out_dir=out_dir,
+        strategies=strategies,
+    )
+
+    # Report
+    print(
+        f"Experiment proposed: {summary['experiment_path']}",
+        file=sys.stderr,
+    )
+    for v in summary["variants"]:
+        print(
+            f"  {v['name']} ({v['strategy']}): "
+            f"{v['recommendation_count']} rec(s), "
+            f"{v['active_patches']} active patch(es)",
+            file=sys.stderr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1344,6 +1442,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         default="experiment.json",
         help="Output path (default: experiment.json)",
+    )
+
+    # corpus experiment propose
+    p_ep = exp_sub.add_parser(
+        "propose",
+        help="Generate per-variant tuning and patch artifacts",
+    )
+    p_ep.add_argument(
+        "--corpus",
+        required=True,
+        help="Path to tuning JSON (from --emit-tuning)",
+    )
+    p_ep.add_argument(
+        "--repos-yaml",
+        default="repos.yaml",
+        help="Path to repos.yaml (default: repos.yaml)",
+    )
+    p_ep.add_argument(
+        "--experiment",
+        default=None,
+        help="Path to experiment envelope JSON (optional; auto-creates if omitted)",
+    )
+    p_ep.add_argument(
+        "--out-dir",
+        default=".",
+        help="Output directory for variant artifacts (default: .)",
+    )
+    p_ep.add_argument(
+        "--strategy",
+        action="append",
+        default=None,
+        help="Strategy override: 'A=aggressive' (repeatable)",
     )
 
     return parser

@@ -41,6 +41,11 @@ from cts.corpus.tuning_schema import (
     TuningRecommendation,
     generate_tuning,
 )
+from cts.corpus.variants import (
+    generate_variants,
+    make_variant_tuning,
+    propose_experiment,
+)
 
 __all__ = [
     "scan_dir",
@@ -72,4 +77,7 @@ __all__ = [
     "validate_experiment",
     "TuningEnvelope",
     "TuningRecommendation",
+    "generate_variants",
+    "make_variant_tuning",
+    "propose_experiment",
 ]
