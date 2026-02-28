@@ -5,10 +5,17 @@ Modes:
   error    — stack-trace-aware: extract files from trace, boost in ranking
   symbol   — definition + call site bundles
   change   — git diff + hunk context slices
+
+When debug=True, bundles include a _debug key with:
+  - timings_ms: per-step timing breakdown
+  - sections: per-section byte/line counts
+  - score_cards: ranking signal breakdown (top N)
+  - limits: parameters used for this bundle
 """
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,6 +34,76 @@ DEFAULT_MAX_FILES = 5
 DEFAULT_CONTEXT = 30
 MAX_SNIPPET_LEN = 200
 MINIFIED_AVG_THRESHOLD = 500
+
+
+# ---------------------------------------------------------------------------
+# Telemetry helpers
+# ---------------------------------------------------------------------------
+
+
+class _Timer:
+    """Lightweight step timer for debug telemetry."""
+
+    def __init__(self) -> None:
+        self._steps: List[Tuple[str, float]] = []
+        self._start = time.monotonic()
+        self._lap = self._start
+
+    def lap(self, name: str) -> None:
+        now = time.monotonic()
+        self._steps.append((name, (now - self._lap) * 1000))
+        self._lap = now
+
+    def to_dict(self) -> Dict[str, float]:
+        total = (time.monotonic() - self._start) * 1000
+        d = {name: round(ms, 2) for name, ms in self._steps}
+        d["total"] = round(total, 2)
+        return d
+
+
+def _section_size(data: Any) -> Dict[str, int]:
+    """Estimate byte and line counts for a section."""
+    text = json.dumps(data, ensure_ascii=False) if data else ""
+    return {
+        "bytes": len(text.encode("utf-8")),
+        "lines": text.count("\n") + (1 if text else 0),
+        "items": len(data) if isinstance(data, list) else (1 if data else 0),
+    }
+
+
+def _compute_debug(
+    bundle: Dict[str, Any],
+    timer: _Timer,
+    score_cards: Optional[List[Dict[str, Any]]] = None,
+    explain_top: int = 10,
+    limits: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the _debug telemetry object."""
+    sections = {}
+    for key in ("ranked_sources", "matches", "slices", "symbols", "diff"):
+        val = bundle.get(key)
+        if val:
+            sections[key] = _section_size(val)
+
+    # Bundle-level sizing
+    full_text = json.dumps(bundle, ensure_ascii=False, default=str)
+    bundle_bytes = len(full_text.encode("utf-8"))
+    bundle_lines = full_text.count("\n") + 1
+
+    debug: Dict[str, Any] = {
+        "timings_ms": timer.to_dict(),
+        "sections": sections,
+        "bundle_bytes": bundle_bytes,
+        "bundle_lines": bundle_lines,
+    }
+
+    if score_cards:
+        debug["score_cards"] = score_cards[:explain_top]
+
+    if limits:
+        debug["limits"] = limits
+
+    return debug
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +197,11 @@ def build_default_bundle(
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
     repo_root: Optional[str] = None,
+    debug: bool = False,
+    explain_top: int = 10,
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
+    timer = _Timer()
     rid = search_data.get("_request_id", request_id or "")
     query = search_data.get("query", "")
     matches = search_data.get("matches", [])
@@ -130,12 +210,23 @@ def build_default_bundle(
     bundle["truncated"] = search_data.get("truncated", False)
 
     # Rank matches
-    ranked = rank_matches(
-        matches,
-        prefer_paths=prefer_paths,
-        avoid_paths=avoid_paths,
-        repo_root=repo_root,
-    )
+    score_cards = None
+    if debug:
+        ranked, score_cards = rank_matches(
+            matches,
+            prefer_paths=prefer_paths,
+            avoid_paths=avoid_paths,
+            repo_root=repo_root,
+            explain=True,
+        )
+    else:
+        ranked = rank_matches(
+            matches,
+            prefer_paths=prefer_paths,
+            avoid_paths=avoid_paths,
+            repo_root=repo_root,
+        )
+    timer.lap("ranking")
 
     # Ranked sources + trimmed snippets
     _populate_ranked_and_matches(bundle, ranked)
@@ -143,11 +234,25 @@ def build_default_bundle(
     # Top K file slices
     top_files = _dedupe_top_files(ranked, max_files)
     bundle["slices"] = fetch_slices(top_files, repo, request_id=rid, context=context)
+    timer.lap("slice_fetch")
 
     # Suggested next commands
     bundle["suggested_commands"] = _suggest_commands(
         repo, query, matches, mode="default"
     )
+
+    if debug:
+        bundle["_debug"] = _compute_debug(
+            bundle,
+            timer,
+            score_cards=score_cards,
+            explain_top=explain_top,
+            limits={
+                "max_files": max_files,
+                "context": context,
+                "mode": "default",
+            },
+        )
 
     return bundle
 
@@ -167,12 +272,15 @@ def build_error_bundle(
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
     repo_root: Optional[str] = None,
+    debug: bool = False,
+    explain_top: int = 10,
 ) -> Dict[str, Any]:
     """Build an error-aware evidence bundle.
 
     If error_text contains a stack trace, extract file references
     and boost them in ranking. Falls back to default otherwise.
     """
+    timer = _Timer()
     rid = search_data.get("_request_id", request_id or "")
     query = search_data.get("query", "")
     matches = search_data.get("matches", [])
@@ -187,15 +295,28 @@ def build_error_bundle(
         bundle["notes"].append(
             f"Stack trace detected: {len(trace_files)} file(s) extracted"
         )
+    timer.lap("trace_extract")
 
     # Rank with trace boost
-    ranked = rank_matches(
-        matches,
-        trace_files=trace_files,
-        prefer_paths=prefer_paths,
-        avoid_paths=avoid_paths,
-        repo_root=repo_root,
-    )
+    score_cards = None
+    if debug:
+        ranked, score_cards = rank_matches(
+            matches,
+            trace_files=trace_files,
+            prefer_paths=prefer_paths,
+            avoid_paths=avoid_paths,
+            repo_root=repo_root,
+            explain=True,
+        )
+    else:
+        ranked = rank_matches(
+            matches,
+            trace_files=trace_files,
+            prefer_paths=prefer_paths,
+            avoid_paths=avoid_paths,
+            repo_root=repo_root,
+        )
+    timer.lap("ranking")
 
     # Ranked sources + trimmed snippets
     trace_path_set = {tf[0] for tf in trace_files}
@@ -210,8 +331,23 @@ def build_error_bundle(
         top_files = _dedupe_top_files(ranked, max_files)
 
     bundle["slices"] = fetch_slices(top_files, repo, request_id=rid, context=context)
+    timer.lap("slice_fetch")
 
     bundle["suggested_commands"] = _suggest_commands(repo, query, matches, mode="error")
+
+    if debug:
+        bundle["_debug"] = _compute_debug(
+            bundle,
+            timer,
+            score_cards=score_cards,
+            explain_top=explain_top,
+            limits={
+                "max_files": max_files,
+                "context": context,
+                "mode": "error",
+                "trace_files_found": len(trace_files),
+            },
+        )
 
     return bundle
 
@@ -229,11 +365,13 @@ def build_symbol_bundle(
     request_id: Optional[str] = None,
     max_files: int = DEFAULT_MAX_FILES,
     context: int = DEFAULT_CONTEXT,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     """Build a symbol evidence bundle.
 
     Combines symbol definitions with search results for call sites.
     """
+    timer = _Timer()
     rid = symbol_data.get("_request_id", request_id or "")
 
     bundle = _empty_bundle("symbol", repo, rid, symbol)
@@ -248,12 +386,14 @@ def build_symbol_bundle(
                 "file": d.get("file", ""),
             }
         )
+    timer.lap("symbol_parse")
 
     # Slices around definitions
     def_files = [{"path": d.get("file", ""), "line": 1} for d in defs if d.get("file")]
     bundle["slices"] = fetch_slices(
         def_files[:max_files], repo, request_id=rid, context=context
     )
+    timer.lap("slice_fetch")
 
     # Call sites from search (if available)
     if search_data:
@@ -272,6 +412,18 @@ def build_symbol_bundle(
 
     bundle["suggested_commands"] = _suggest_commands(repo, symbol, [], mode="symbol")
 
+    if debug:
+        bundle["_debug"] = _compute_debug(
+            bundle,
+            timer,
+            limits={
+                "max_files": max_files,
+                "context": context,
+                "mode": "symbol",
+                "definitions_found": len(defs),
+            },
+        )
+
     return bundle
 
 
@@ -286,17 +438,20 @@ def build_change_bundle(
     request_id: Optional[str] = None,
     max_files: int = DEFAULT_MAX_FILES,
     context: int = DEFAULT_CONTEXT,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     """Build a change evidence bundle from git diff output.
 
     Parses diff hunks and fetches surrounding context.
     """
+    timer = _Timer()
     bundle = _empty_bundle("change", repo, request_id or "", "")
     bundle["diff"] = diff_text
 
     # Parse changed files from diff headers
     changed_files = _parse_diff_files(diff_text)
     bundle["notes"].append(f"{len(changed_files)} file(s) changed")
+    timer.lap("diff_parse")
 
     for cf in changed_files:
         bundle["ranked_sources"].append(
@@ -314,8 +469,21 @@ def build_change_bundle(
         request_id=request_id,
         context=context,
     )
+    timer.lap("slice_fetch")
 
     bundle["suggested_commands"] = _suggest_commands(repo, "", [], mode="change")
+
+    if debug:
+        bundle["_debug"] = _compute_debug(
+            bundle,
+            timer,
+            limits={
+                "max_files": max_files,
+                "context": context,
+                "mode": "change",
+                "files_changed": len(changed_files),
+            },
+        )
 
     return bundle
 
