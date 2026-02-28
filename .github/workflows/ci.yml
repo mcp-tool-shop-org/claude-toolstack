@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r gateway/requirements.txt
-          pip install ruff mypy types-PyYAML
+          pip install ruff mypy types-PyYAML pytest
 
       - name: Ruff lint
         run: ruff check gateway/ cts/
