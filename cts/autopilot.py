@@ -169,25 +169,19 @@ def plan_refinements(
         uncov_defs = _find_uncovered_def_files(bundle)
         if uncov_defs:
             a = _action_pin_def_slices(uncov_defs)
-            a["trigger_reason"] = (
-                f"{len(uncov_defs)} def file(s) missing slices"
-            )
+            a["trigger_reason"] = f"{len(uncov_defs)} def file(s) missing slices"
             actions.append(a)
         uncov_callers = _find_uncovered_caller_files(bundle)
         if uncov_callers:
             a = _action_expand_callers(uncov_callers)
-            a["trigger_reason"] = (
-                f"{len(uncov_callers)} caller file(s) missing slices"
-            )
+            a["trigger_reason"] = f"{len(uncov_callers)} caller file(s) missing slices"
             actions.append(a)
 
     elif mode == "change":
         uncov_changed = _find_uncovered_changed_files(bundle)
         if uncov_changed:
             a = _action_focus_changed_files(uncov_changed)
-            a["trigger_reason"] = (
-                f"{len(uncov_changed)} changed file(s) missing slices"
-            )
+            a["trigger_reason"] = f"{len(uncov_changed)} changed file(s) missing slices"
             actions.append(a)
         ident_count = _count_diff_idents(bundle)
         # If diff has identifiers but slice/symbol coverage is low,
@@ -216,9 +210,7 @@ def plan_refinements(
     slice_coverage = signals.get("slice_coverage", 0.0)
     if slice_coverage < 0.1:
         a = _action_add_slices()
-        a["trigger_reason"] = (
-            f"slice_coverage={slice_coverage:.3f} < 0.1"
-        )
+        a["trigger_reason"] = f"slice_coverage={slice_coverage:.3f} < 0.1"
         actions.append(a)
 
     # Priority 3: If no definition found, try symbol lookup
@@ -257,9 +249,7 @@ def _find_uncovered_trace_targets(
     each trace file already has a matching slice. Returns the
     uncovered targets as [{path, line}, ...].
     """
-    trace_sources = [
-        s for s in bundle.get("ranked_sources", []) if s.get("in_trace")
-    ]
+    trace_sources = [s for s in bundle.get("ranked_sources", []) if s.get("in_trace")]
     if not trace_sources:
         return []
 
@@ -407,18 +397,14 @@ def apply_refinement(
         extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
         new_params["evidence_files"] = min(current + extra, 15)
         # Store targets so the builder can prioritize them
-        new_params["_force_slice_paths"] = [
-            t["path"] for t in targets
-        ]
+        new_params["_force_slice_paths"] = [t["path"] for t in targets]
 
     elif name == "pin_def_slices":
         targets = action.get("def_targets", [])
         current = new_params.get("evidence_files", 5)
         extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
         new_params["evidence_files"] = min(current + extra, 15)
-        new_params["_force_slice_paths"] = [
-            t["path"] for t in targets
-        ]
+        new_params["_force_slice_paths"] = [t["path"] for t in targets]
 
     elif name == "expand_callers":
         targets = action.get("caller_targets", [])
@@ -427,18 +413,14 @@ def apply_refinement(
         new_params["evidence_files"] = min(current + extra, 15)
         # Append to existing force paths if present (from pin_def_slices)
         existing = new_params.get("_force_slice_paths", [])
-        new_params["_force_slice_paths"] = existing + [
-            t["path"] for t in targets
-        ]
+        new_params["_force_slice_paths"] = existing + [t["path"] for t in targets]
 
     elif name == "focus_changed_files":
         targets = action.get("changed_targets", [])
         current = new_params.get("evidence_files", 5)
         extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
         new_params["evidence_files"] = min(current + extra, 15)
-        new_params["_force_slice_paths"] = [
-            t["path"] for t in targets
-        ]
+        new_params["_force_slice_paths"] = [t["path"] for t in targets]
 
     elif name == "expand_diff_idents":
         # Bump the identifier cap by 10 (from default ~20 to 30)

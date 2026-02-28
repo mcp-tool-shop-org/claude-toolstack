@@ -45,14 +45,10 @@ def _error_mode_bonus(
         bonus += 0.05
 
     # Trace coverage: in_trace sources covered by slices
-    trace_sources = [
-        s for s in bundle.get("ranked_sources", []) if s.get("in_trace")
-    ]
+    trace_sources = [s for s in bundle.get("ranked_sources", []) if s.get("in_trace")]
     if trace_sources:
         slice_paths = {s.get("path", "") for s in slices}
-        covered = sum(
-            1 for ts in trace_sources if ts.get("path", "") in slice_paths
-        )
+        covered = sum(1 for ts in trace_sources if ts.get("path", "") in slice_paths)
         coverage = covered / len(trace_sources)
         bonus += 0.10 * coverage
 
@@ -118,9 +114,7 @@ def _change_mode_bonus(
     sources = bundle.get("ranked_sources", [])
     if sources:
         slice_paths = {s.get("path", "") for s in slices}
-        covered = sum(
-            1 for src in sources if src.get("path", "") in slice_paths
-        )
+        covered = sum(1 for src in sources if src.get("path", "") in slice_paths)
         bonus += 0.10 * (covered / len(sources))
 
     return bonus
