@@ -7,6 +7,14 @@ on:
         description: 'Artifact name pattern to download (default: latest sidecar)'
         required: false
         default: 'sidecar-evidence-*'
+      emit_tuning:
+        description: 'Generate tuning recommendations (true/false)'
+        required: false
+        default: 'true'
+      evaluate_baseline:
+        description: 'Path to baseline corpus for evaluation (empty = skip)'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -53,6 +61,64 @@ jobs:
         run: |
           cts corpus report corpus.jsonl --format text
 
+      # --- Tuning pipeline (opt-in via inputs) ---
+
+      - name: Generate tuning recommendations
+        if: inputs.emit_tuning == 'true'
+        run: |
+          cts corpus report corpus.jsonl \
+            --format json \
+            --emit-tuning tuning.json
+
+          echo "--- Tuning recommendations ---"
+          cat tuning.json | python -m json.tool | head -60
+
+      - name: Generate patch plan (dry-run)
+        if: inputs.emit_tuning == 'true'
+        run: |
+          cts corpus patch tuning.json \
+            --repos-yaml repos.yaml \
+            --format text
+
+          cts corpus patch tuning.json \
+            --repos-yaml repos.yaml \
+            --format json \
+            --out patch-plan.json
+
+          cts corpus patch tuning.json \
+            --repos-yaml repos.yaml \
+            --format diff \
+            --out tuning.diff
+
+      - name: Preview apply (dry-run)
+        if: inputs.emit_tuning == 'true'
+        run: |
+          cts corpus apply tuning.json \
+            --repos-yaml repos.yaml \
+            --dry-run
+
+      # --- Evaluation (opt-in via baseline path) ---
+
+      - name: Evaluate tuning impact
+        if: inputs.evaluate_baseline != ''
+        run: |
+          cts corpus evaluate \
+            "${{ inputs.evaluate_baseline }}" \
+            corpus.jsonl \
+            --format text
+
+          cts corpus evaluate \
+            "${{ inputs.evaluate_baseline }}" \
+            corpus.jsonl \
+            --format json \
+            --out evaluation.json
+
+          cts corpus evaluate \
+            "${{ inputs.evaluate_baseline }}" \
+            corpus.jsonl \
+            --format markdown \
+            --out evaluation.md
+
       - name: Upload corpus artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -63,4 +129,9 @@ jobs:
             corpus_passes.jsonl
             report.md
             report.json
+            tuning.json
+            patch-plan.json
+            tuning.diff
+            evaluation.json
+            evaluation.md
           retention-days: 90

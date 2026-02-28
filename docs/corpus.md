@@ -133,17 +133,105 @@ Automatic hints based on detected patterns:
 - Near-zero action lift → disable or revise trigger logic
 - High fraction of low-lift runs → raise threshold or tighten planner
 
-## CI integration
+## Tuning automation
 
-The `corpus-report` workflow runs manually or on a schedule. It
-ingests sidecar artifacts from the current or previous CI runs and
-uploads the corpus JSONL + markdown report as artifacts.
+The full tuning pipeline turns corpus insights into reviewable
+config changes with safety guardrails.
+
+### Generate tuning recommendations
 
 ```bash
-# Trigger manually
+cts corpus report corpus.jsonl \
+  --format json \
+  --emit-tuning tuning.json
+```
+
+The `tuning.json` envelope contains machine-readable recommendations
+with stable IDs, scopes, change types, evidence, risk levels, and
+rollback instructions.
+
+### Preview patch plan (dry-run)
+
+```bash
+# Human-readable summary
+cts corpus patch tuning.json --repos-yaml repos.yaml
+
+# Unified diff preview
+cts corpus patch tuning.json --repos-yaml repos.yaml --format diff
+
+# Machine-readable plan
+cts corpus patch tuning.json --repos-yaml repos.yaml --format json \
+  --out patch-plan.json
+```
+
+### Apply changes
+
+```bash
+# Dry run first
+cts corpus apply tuning.json --repos-yaml repos.yaml --dry-run
+
+# Apply for real (creates backup + rollback.json)
+cts corpus apply tuning.json --repos-yaml repos.yaml
+
+# High-risk patches are blocked by default
+cts corpus apply tuning.json --repos-yaml repos.yaml --allow-high-risk
+```
+
+Safety measures:
+- Timestamped backup (`repos.yaml.bak.<ts>`) before any edit
+- High-risk patches blocked unless `--allow-high-risk`
+- Atomic write (tmp + rename)
+- Rollback artifact (`rollback.json`) for full restoration
+
+### Rollback
+
+```bash
+cts corpus rollback rollback.json
+```
+
+### Evaluate impact
+
+Compare a baseline corpus (before tuning) with a new corpus
+(after tuning) to prove the changes helped:
+
+```bash
+cts corpus evaluate baseline.jsonl after.jsonl --format markdown
+```
+
+KPIs tracked:
+- `confidence_final_mean` (higher = better)
+- `confidence_delta_mean` (higher = better)
+- `truncation_rate` (lower = better)
+- `autopilot_low_lift_rate` (lower = better)
+- `bundle_bytes_p90` (lower = better)
+- `should_autopilot_count` (lower = better)
+
+Verdicts: `improved`, `regressed`, `mixed`, `unchanged`, `no_data`
+
+## CI integration
+
+The `corpus-report` workflow runs manually and supports the full
+tuning pipeline. It ingests sidecar artifacts, generates reports,
+and optionally produces tuning recommendations and evaluations.
+
+```bash
+# Basic report
 gh workflow run corpus-report.yml
+
+# With tuning recommendations
+gh workflow run corpus-report.yml \
+  -f emit_tuning=true
+
+# With evaluation against a baseline
+gh workflow run corpus-report.yml \
+  -f emit_tuning=true \
+  -f evaluate_baseline=baseline.jsonl
 ```
 
 The workflow uploads:
 - `corpus.jsonl` — raw corpus for further analysis
 - `report.md` — formatted report ready for wiki/PR
+- `tuning.json` — machine-readable recommendations
+- `patch-plan.json` — concrete config edits
+- `tuning.diff` — unified diff preview
+- `evaluation.json` / `evaluation.md` — before/after comparison
