@@ -6,6 +6,8 @@ import unittest
 
 from cts.autopilot import (
     DEFAULT_MAX_EXTRA_SLICES,
+    _find_uncovered_caller_files,
+    _find_uncovered_def_files,
     _find_uncovered_trace_targets,
     apply_refinement,
     execute_refinements,
@@ -622,6 +624,318 @@ class TestForceTraceSlicesExecution(unittest.TestCase):
         slice_paths = [s["path"] for s in final["slices"]]
         self.assertIn("app/handler.py", slice_paths)
         self.assertIn("lib/db.py", slice_paths)
+
+
+# ---------------------------------------------------------------------------
+# Symbol-mode helpers
+# ---------------------------------------------------------------------------
+
+
+def _symbol_bundle(*, defs_in_slices: bool = False, callers_in_slices: bool = False):
+    """Symbol bundle with definitions and callers.
+
+    Scores are low so confidence is below threshold. Defs are in symbols[],
+    callers are in matches[].
+    """
+    slices = []
+    if defs_in_slices:
+        slices.append(
+            {"path": "lib/parser.py", "start": 1, "lines": ["..."] * 20}
+        )
+    if callers_in_slices:
+        slices.extend([
+            {"path": "src/main.py", "start": 1, "lines": ["..."] * 10},
+            {"path": "src/handler.py", "start": 1, "lines": ["..."] * 10},
+            {"path": "tests/test_p.py", "start": 1, "lines": ["..."] * 10},
+        ])
+
+    return {
+        "version": 2,
+        "mode": "symbol",
+        "repo": "org/repo",
+        "request_id": "s1",
+        "query": "parse_config",
+        "ranked_sources": [
+            {"path": "lib/parser.py", "line": 10, "score": 0.3},
+            {"path": "src/main.py", "line": 42, "score": 0.2},
+        ],
+        "matches": [
+            {"path": "src/main.py", "line": 42, "snippet": "parse_config(data)"},
+            {"path": "src/handler.py", "line": 7, "snippet": "cfg = parse_config(f)"},
+            {"path": "tests/test_p.py", "line": 3, "snippet": "parse_config({})"},
+        ],
+        "slices": slices,
+        "symbols": [
+            {"name": "parse_config", "kind": "function", "file": "lib/parser.py"},
+        ],
+        "diff": "",
+        "suggested_commands": [],
+        "notes": [],
+        "truncated": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests: _find_uncovered_def_files
+# ---------------------------------------------------------------------------
+
+
+class TestFindUncoveredDefFiles(unittest.TestCase):
+    def test_returns_uncovered_def_files(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        uncov = _find_uncovered_def_files(b)
+        paths = [t["path"] for t in uncov]
+        self.assertIn("lib/parser.py", paths)
+
+    def test_returns_empty_when_defs_covered(self):
+        b = _symbol_bundle(defs_in_slices=True)
+        uncov = _find_uncovered_def_files(b)
+        self.assertEqual(uncov, [])
+
+    def test_returns_empty_for_no_symbols(self):
+        b = _low_conf_bundle()  # default mode, no symbols
+        uncov = _find_uncovered_def_files(b)
+        self.assertEqual(uncov, [])
+
+    def test_deduplicates_def_files(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        # Add duplicate symbol for same file
+        b["symbols"].append(
+            {"name": "parse_config_v2", "kind": "function", "file": "lib/parser.py"}
+        )
+        uncov = _find_uncovered_def_files(b)
+        paths = [t["path"] for t in uncov]
+        self.assertEqual(paths.count("lib/parser.py"), 1)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _find_uncovered_caller_files
+# ---------------------------------------------------------------------------
+
+
+class TestFindUncoveredCallerFiles(unittest.TestCase):
+    def test_returns_uncovered_callers(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=False)
+        uncov = _find_uncovered_caller_files(b)
+        paths = [t["path"] for t in uncov]
+        self.assertIn("src/main.py", paths)
+        self.assertIn("src/handler.py", paths)
+
+    def test_excludes_def_files(self):
+        b = _symbol_bundle(defs_in_slices=False, callers_in_slices=False)
+        uncov = _find_uncovered_caller_files(b)
+        paths = [t["path"] for t in uncov]
+        # lib/parser.py is a def file, should not appear as caller
+        self.assertNotIn("lib/parser.py", paths)
+
+    def test_returns_empty_when_callers_covered(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=True)
+        uncov = _find_uncovered_caller_files(b)
+        self.assertEqual(uncov, [])
+
+    def test_respects_max_callers(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=False)
+        uncov = _find_uncovered_caller_files(b, max_callers=1)
+        self.assertLessEqual(len(uncov), 1)
+
+    def test_includes_line_numbers(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=False)
+        uncov = _find_uncovered_caller_files(b)
+        main = [t for t in uncov if t["path"] == "src/main.py"]
+        self.assertEqual(len(main), 1)
+        self.assertEqual(main[0]["line"], 42)
+
+
+# ---------------------------------------------------------------------------
+# Tests: symbol-mode planner integration
+# ---------------------------------------------------------------------------
+
+
+class TestSymbolModePlanner(unittest.TestCase):
+    def test_symbol_mode_triggers_pin_def_slices(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertIn("pin_def_slices", names)
+
+    def test_symbol_mode_triggers_expand_callers(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertIn("expand_callers", names)
+
+    def test_symbol_mode_both_actions_when_uncovered(self):
+        b = _symbol_bundle(defs_in_slices=False, callers_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        # Both should be present (2-action cap, symbol actions fill both slots)
+        self.assertIn("pin_def_slices", names)
+        self.assertIn("expand_callers", names)
+
+    def test_pin_def_slices_is_first_priority(self):
+        b = _symbol_bundle(defs_in_slices=False, callers_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        self.assertEqual(actions[0]["name"], "pin_def_slices")
+
+    def test_no_symbol_actions_for_default_mode(self):
+        b = _low_conf_bundle()
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertNotIn("pin_def_slices", names)
+        self.assertNotIn("expand_callers", names)
+
+    def test_pin_def_slices_carries_targets(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        pds = [a for a in actions if a["name"] == "pin_def_slices"][0]
+        self.assertIn("def_targets", pds)
+        paths = [t["path"] for t in pds["def_targets"]]
+        self.assertIn("lib/parser.py", paths)
+
+    def test_expand_callers_carries_targets(self):
+        b = _symbol_bundle(defs_in_slices=True, callers_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        ec = [a for a in actions if a["name"] == "expand_callers"][0]
+        self.assertIn("caller_targets", ec)
+        self.assertGreater(len(ec["caller_targets"]), 0)
+
+
+# ---------------------------------------------------------------------------
+# Tests: symbol-mode apply_refinement
+# ---------------------------------------------------------------------------
+
+
+class TestSymbolModeApply(unittest.TestCase):
+    def test_pin_def_slices_increases_evidence_files(self):
+        action = {
+            "name": "pin_def_slices",
+            "def_targets": [{"path": "lib/parser.py", "line": 1}],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 6)
+
+    def test_pin_def_slices_stores_force_paths(self):
+        action = {
+            "name": "pin_def_slices",
+            "def_targets": [{"path": "lib/parser.py", "line": 1}],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["_force_slice_paths"], ["lib/parser.py"])
+
+    def test_expand_callers_increases_evidence_files(self):
+        action = {
+            "name": "expand_callers",
+            "caller_targets": [
+                {"path": "src/main.py", "line": 42},
+                {"path": "src/handler.py", "line": 7},
+            ],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 7)
+
+    def test_expand_callers_appends_to_existing_force_paths(self):
+        action = {
+            "name": "expand_callers",
+            "caller_targets": [{"path": "src/main.py", "line": 42}],
+        }
+        # Simulate pin_def_slices already applied
+        params = {
+            "evidence_files": 6,
+            "_force_slice_paths": ["lib/parser.py"],
+        }
+        new = apply_refinement(params, action)
+        self.assertEqual(
+            new["_force_slice_paths"], ["lib/parser.py", "src/main.py"]
+        )
+
+    def test_expand_callers_caps_at_15(self):
+        action = {
+            "name": "expand_callers",
+            "caller_targets": [
+                {"path": f"f{i}.py", "line": i} for i in range(10)
+            ],
+        }
+        params = {"evidence_files": 12}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 15)
+
+
+# ---------------------------------------------------------------------------
+# Tests: symbol-mode execution
+# ---------------------------------------------------------------------------
+
+
+class TestSymbolModeExecution(unittest.TestCase):
+    def _build_fn_symbol(self, **kwargs) -> dict:
+        """Mock build fn that adds def/caller slices when forced."""
+        force_paths = kwargs.get("_force_slice_paths", [])
+        evidence_files = kwargs.get("evidence_files", 5)
+        slices = []
+        for fp in force_paths:
+            slices.append({"path": fp, "start": 1, "lines": ["..."] * 20})
+        # Fill remaining
+        for i in range(min(evidence_files - len(slices), 1)):
+            slices.append(
+                {"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10}
+            )
+
+        return {
+            "version": 2,
+            "mode": "symbol",
+            "repo": kwargs.get("repo", "org/repo"),
+            "request_id": "",
+            "query": "parse_config",
+            "ranked_sources": [
+                {"path": "lib/parser.py", "line": 10, "score": 0.3},
+            ],
+            "matches": [
+                {"path": "src/main.py", "line": 42, "snippet": "parse_config(d)"},
+            ],
+            "slices": slices,
+            "symbols": [
+                {"name": "parse_config", "kind": "function", "file": "lib/parser.py"},
+            ],
+            "diff": "",
+            "suggested_commands": [],
+            "notes": [],
+            "truncated": False,
+        }
+
+    def test_pass_records_include_def_details(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_symbol,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        self.assertGreater(len(result["passes"]), 0)
+        p = result["passes"][0]
+        pds = [d for d in p["action_details"] if d["name"] == "pin_def_slices"]
+        self.assertEqual(len(pds), 1)
+        self.assertIn("def_targets", pds[0])
+
+    def test_def_slices_added_after_execution(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_symbol,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        final = result["final_bundle"]
+        slice_paths = [s["path"] for s in final["slices"]]
+        self.assertIn("lib/parser.py", slice_paths)
 
 
 if __name__ == "__main__":

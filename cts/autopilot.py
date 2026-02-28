@@ -11,6 +11,8 @@ Generic actions (all modes):
 
 Mode-specific actions:
   - force_trace_slices: (error) ensure slices cover trace locations
+  - pin_def_slices: (symbol) ensure slices cover definition files
+  - expand_callers: (symbol) add slices for uncovered caller files
 
 Each pass produces a new bundle stored in sidecar.passes[].
 Stops when confidence is sufficient or budget is exhausted.
@@ -78,6 +80,26 @@ def _action_force_trace_slices(
     }
 
 
+def _action_pin_def_slices(
+    uncovered_defs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "name": "pin_def_slices",
+        "description": "Fetch slices at symbol definition files missing from bundle",
+        "def_targets": uncovered_defs,
+    }
+
+
+def _action_expand_callers(
+    uncovered_callers: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "name": "expand_callers",
+        "description": "Fetch slices for caller files missing from bundle",
+        "caller_targets": uncovered_callers,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
@@ -114,6 +136,14 @@ def plan_refinements(
         uncovered = _find_uncovered_trace_targets(bundle)
         if uncovered:
             actions.append(_action_force_trace_slices(uncovered))
+
+    elif mode == "symbol":
+        uncov_defs = _find_uncovered_def_files(bundle)
+        if uncov_defs:
+            actions.append(_action_pin_def_slices(uncov_defs))
+        uncov_callers = _find_uncovered_caller_files(bundle)
+        if uncov_callers:
+            actions.append(_action_expand_callers(uncov_callers))
 
     # --- Generic actions ---
 
@@ -172,6 +202,62 @@ def _find_uncovered_trace_targets(
     return uncovered
 
 
+def _find_uncovered_def_files(
+    bundle: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Find symbol definition files that lack slice coverage.
+
+    Looks at symbols[] for files and checks whether each is already
+    in slices[]. Returns uncovered defs as [{path, line}, ...].
+    """
+    symbols = bundle.get("symbols", [])
+    if not symbols:
+        return []
+
+    slice_paths = {s.get("path", "") for s in bundle.get("slices", [])}
+    uncovered = []
+    seen: set = set()
+    for sym in symbols:
+        path = sym.get("file", "")
+        if path and path not in slice_paths and path not in seen:
+            seen.add(path)
+            uncovered.append({"path": path, "line": 1})
+
+    return uncovered
+
+
+def _find_uncovered_caller_files(
+    bundle: Dict[str, Any],
+    max_callers: int = 5,
+) -> List[Dict[str, Any]]:
+    """Find top caller files (from matches) that lack slice coverage.
+
+    Callers are match entries whose path differs from any symbol def file.
+    Returns up to max_callers uncovered caller targets.
+    """
+    symbols = bundle.get("symbols", [])
+    def_files = {s.get("file", "") for s in symbols}
+    matches = bundle.get("matches", [])
+    slice_paths = {s.get("path", "") for s in bundle.get("slices", [])}
+
+    uncovered = []
+    seen: set = set()
+    for m in matches:
+        path = m.get("path", "")
+        if (
+            path
+            and path not in def_files
+            and path not in slice_paths
+            and path not in seen
+        ):
+            seen.add(path)
+            uncovered.append({"path": path, "line": m.get("line", 1)})
+        if len(uncovered) >= max_callers:
+            break
+
+    return uncovered
+
+
 def apply_refinement(
     params: Dict[str, Any],
     action: Dict[str, Any],
@@ -205,6 +291,26 @@ def apply_refinement(
         new_params["evidence_files"] = min(current + extra, 15)
         # Store targets so the builder can prioritize them
         new_params["_force_slice_paths"] = [
+            t["path"] for t in targets
+        ]
+
+    elif name == "pin_def_slices":
+        targets = action.get("def_targets", [])
+        current = new_params.get("evidence_files", 5)
+        extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
+        new_params["evidence_files"] = min(current + extra, 15)
+        new_params["_force_slice_paths"] = [
+            t["path"] for t in targets
+        ]
+
+    elif name == "expand_callers":
+        targets = action.get("caller_targets", [])
+        current = new_params.get("evidence_files", 5)
+        extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
+        new_params["evidence_files"] = min(current + extra, 15)
+        # Append to existing force paths if present (from pin_def_slices)
+        existing = new_params.get("_force_slice_paths", [])
+        new_params["_force_slice_paths"] = existing + [
             t["path"] for t in targets
         ]
 
@@ -282,6 +388,14 @@ def execute_refinements(
                 targets = a.get("trace_targets", [])
                 record["trace_targets"] = [t["path"] for t in targets]
                 record["trace_targets_count"] = len(targets)
+            elif a["name"] == "pin_def_slices":
+                targets = a.get("def_targets", [])
+                record["def_targets"] = [t["path"] for t in targets]
+                record["def_targets_count"] = len(targets)
+            elif a["name"] == "expand_callers":
+                targets = a.get("caller_targets", [])
+                record["caller_targets"] = [t["path"] for t in targets]
+                record["caller_targets_count"] = len(targets)
             action_records.append(record)
 
         pass_record: Dict[str, Any] = {
