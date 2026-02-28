@@ -6,6 +6,7 @@ on:
       - 'gateway/**'
       - 'cts/**'
       - 'tests/**'
+      - 'scripts/**'
       - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
@@ -14,6 +15,7 @@ on:
       - 'gateway/**'
       - 'cts/**'
       - 'tests/**'
+      - 'scripts/**'
       - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
@@ -118,6 +120,38 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs gw-test
+
+  sidecar-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cts
+        run: pip install -e .
+
+      - name: Generate test sidecar artifact
+        run: python scripts/gen_test_sidecar.py ci-artifact.json
+
+      - name: Validate sidecar envelope
+        run: cts sidecar validate ci-artifact.json
+
+      - name: Secrets scan (fail on findings)
+        run: cts sidecar secrets-scan ci-artifact.json --fail --report
+
+      - name: Summarize artifact
+        run: cts sidecar summarize ci-artifact.json --format markdown
+
+      - name: Upload sidecar artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-evidence-${{ github.sha }}
+          path: ci-artifact.json
+          retention-days: 30
 
   policy-lint:
     runs-on: ubuntu-latest
