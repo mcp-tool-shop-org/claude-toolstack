@@ -137,13 +137,36 @@ cts job test --repo myorg/myrepo --preset node
 # All commands support: --format json|text|claude --request-id <id>
 ```
 
-### Evidence Bundles (`--format claude`)
+### Evidence Bundles v2 (`--format claude`)
 
-The `--claude` output mode produces compact, paste-ready evidence packs:
-1. Runs the search
-2. Picks the top K distinct files from results
-3. Fetches context slices (±30 lines by default) for each
-4. Renders a single bundle with matches + inline code
+The `--claude` output mode produces compact, paste-ready evidence packs with structured v2 headers. Four bundle modes are available:
+
+| Mode | Flag | What it does |
+|------|------|-------------|
+| `default` | `--bundle default` | Search + ranked matches + context slices |
+| `error` | `--bundle error` | Stack-trace-aware: extracts files from trace, boosts in ranking |
+| `symbol` | `--bundle symbol` | Definitions + call sites from search |
+| `change` | `--bundle change` | Git diff + hunk context slices |
+
+```bash
+# Default bundle (search + slices)
+cts search "PaymentService" --repo myorg/myrepo --format claude
+
+# Error bundle (pass stack trace for trace-aware ranking)
+cts search "ConnectionError" --repo myorg/myrepo --format claude \
+  --bundle error --error-text "$(cat /tmp/traceback.txt)"
+
+# Symbol bundle (definitions + call sites)
+cts symbol PaymentService --repo myorg/myrepo --format claude --bundle symbol
+
+# Path preferences (boost src, demote vendor)
+cts search "handler" --repo myorg/myrepo --format claude \
+  --prefer-paths src,core --avoid-paths vendor,test
+
+# Git recency scoring (requires local repo access)
+cts search "handler" --repo myorg/myrepo --format claude \
+  --repo-root /workspace/repos/myorg/myrepo
+```
 
 Tuning: `--evidence-files 5` (files to slice), `--context 30` (lines around hit).
 
@@ -226,8 +249,13 @@ claude-toolstack/
 ├── cts/                   # CLI client (zero deps)
 │   ├── cli.py             # argparse commands
 │   ├── http.py            # gateway HTTP client
-│   ├── render.py          # json/text/claude renderers
+│   ├── render.py          # json/text/claude renderers (v1+v2)
+│   ├── bundle.py          # v2 bundle orchestrator (4 modes)
+│   ├── ranking.py         # path scoring, trace extraction, recency
 │   └── config.py          # env + defaults
+├── tests/                 # Unit tests (pytest)
+│   ├── test_ranking.py    # 22 tests: path score, trace, recency
+│   └── test_bundle.py     # 18 tests: bundle modes, helpers
 ├── gateway/
 │   ├── main.py            # FastAPI gateway
 │   ├── Dockerfile         # python:3.12-slim + ripgrep + tini

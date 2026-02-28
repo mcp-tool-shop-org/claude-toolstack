@@ -54,7 +54,7 @@ _TRACE_PATTERNS = [
     # Go: /path/to/file.go:42
     re.compile(r"\s+(/?\S+\.go):(\d+)"),
     # Rust: --> src/main.rs:42:10
-    re.compile(r"-->\s+(\S+):(\d+)(?::\d+)?"),
+    re.compile(r"-->\s+(.+?):(\d+)(?::\d+)?"),
     # .NET: in Namespace.Class.Method() in /path/File.cs:line 42
     re.compile(r"in (\S+\.cs):line (\d+)"),
     # Generic: path/file.ext:42 at start of line

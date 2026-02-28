@@ -5,6 +5,7 @@ on:
     paths:
       - 'gateway/**'
       - 'cts/**'
+      - 'tests/**'
       - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
@@ -12,6 +13,7 @@ on:
     paths:
       - 'gateway/**'
       - 'cts/**'
+      - 'tests/**'
       - 'pyproject.toml'
       - 'compose.yaml'
       - '.github/workflows/**'
@@ -50,6 +52,9 @@ jobs:
           pip install -e .
           cts --version
           cts --help
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
 
   container-build:
     runs-on: ubuntu-latest
