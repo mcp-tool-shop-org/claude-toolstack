@@ -6,7 +6,9 @@ import unittest
 
 from cts.autopilot import (
     DEFAULT_MAX_EXTRA_SLICES,
+    _count_diff_idents,
     _find_uncovered_caller_files,
+    _find_uncovered_changed_files,
     _find_uncovered_def_files,
     _find_uncovered_trace_targets,
     apply_refinement,
@@ -936,6 +938,274 @@ class TestSymbolModeExecution(unittest.TestCase):
         final = result["final_bundle"]
         slice_paths = [s["path"] for s in final["slices"]]
         self.assertIn("lib/parser.py", slice_paths)
+
+
+# ---------------------------------------------------------------------------
+# Change-mode helpers
+# ---------------------------------------------------------------------------
+
+_SAMPLE_DIFF = """\
+--- a/src/config.py
++++ b/src/config.py
+@@ -10,7 +10,7 @@
+-    timeout = 30
++    timeout = get_timeout()
+--- a/src/server.py
++++ b/src/server.py
+@@ -5,6 +5,8 @@
++import logging
++logger = logging.getLogger(__name__)
+"""
+
+
+def _change_bundle(*, changed_in_slices: bool = False) -> dict:
+    """Change bundle with diff and changed file sources.
+
+    Scores are low so confidence is below threshold.
+    """
+    slices = []
+    if changed_in_slices:
+        slices = [
+            {"path": "src/config.py", "start": 1, "lines": ["..."] * 20},
+            {"path": "src/server.py", "start": 1, "lines": ["..."] * 20},
+        ]
+
+    return {
+        "version": 2,
+        "mode": "change",
+        "repo": "org/repo",
+        "request_id": "c1",
+        "query": "",
+        "ranked_sources": [
+            {"path": "src/config.py", "line": 10, "score": 0.0},
+            {"path": "src/server.py", "line": 5, "score": 0.0},
+        ],
+        "matches": [],
+        "slices": slices,
+        "symbols": [],
+        "diff": _SAMPLE_DIFF,
+        "suggested_commands": [],
+        "notes": ["2 file(s) changed"],
+        "truncated": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests: _find_uncovered_changed_files
+# ---------------------------------------------------------------------------
+
+
+class TestFindUncoveredChangedFiles(unittest.TestCase):
+    def test_returns_uncovered_changed_files(self):
+        b = _change_bundle(changed_in_slices=False)
+        uncov = _find_uncovered_changed_files(b)
+        paths = [t["path"] for t in uncov]
+        self.assertIn("src/config.py", paths)
+        self.assertIn("src/server.py", paths)
+
+    def test_returns_empty_when_covered(self):
+        b = _change_bundle(changed_in_slices=True)
+        uncov = _find_uncovered_changed_files(b)
+        self.assertEqual(uncov, [])
+
+    def test_partial_coverage(self):
+        b = _change_bundle(changed_in_slices=False)
+        b["slices"] = [
+            {"path": "src/config.py", "start": 1, "lines": ["..."] * 10},
+        ]
+        uncov = _find_uncovered_changed_files(b)
+        paths = [t["path"] for t in uncov]
+        self.assertNotIn("src/config.py", paths)
+        self.assertIn("src/server.py", paths)
+
+
+# ---------------------------------------------------------------------------
+# Tests: _count_diff_idents
+# ---------------------------------------------------------------------------
+
+
+class TestCountDiffIdents(unittest.TestCase):
+    def test_counts_identifiers_from_diff(self):
+        b = _change_bundle()
+        count = _count_diff_idents(b)
+        # Should find: timeout, get_timeout, import, logging, logger, getLogger
+        self.assertGreater(count, 3)
+
+    def test_zero_for_no_diff(self):
+        b = _change_bundle()
+        b["diff"] = ""
+        count = _count_diff_idents(b)
+        self.assertEqual(count, 0)
+
+    def test_ignores_diff_header_lines(self):
+        b = {"diff": "--- a/foo.py\n+++ b/foo.py\n"}
+        count = _count_diff_idents(b)
+        self.assertEqual(count, 0)
+
+
+# ---------------------------------------------------------------------------
+# Tests: change-mode planner integration
+# ---------------------------------------------------------------------------
+
+
+class TestChangeModePlanner(unittest.TestCase):
+    def test_change_mode_triggers_focus_changed_files(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertIn("focus_changed_files", names)
+
+    def test_change_mode_triggers_expand_diff_idents(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertIn("expand_diff_idents", names)
+
+    def test_no_focus_when_covered(self):
+        b = _change_bundle(changed_in_slices=True)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertNotIn("focus_changed_files", names)
+
+    def test_focus_changed_is_highest_priority(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        self.assertEqual(actions[0]["name"], "focus_changed_files")
+
+    def test_no_change_actions_for_default_mode(self):
+        b = _low_conf_bundle()
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertNotIn("focus_changed_files", names)
+        self.assertNotIn("expand_diff_idents", names)
+
+    def test_focus_changed_carries_targets(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        fcf = [a for a in actions if a["name"] == "focus_changed_files"][0]
+        self.assertIn("changed_targets", fcf)
+        self.assertEqual(len(fcf["changed_targets"]), 2)
+
+    def test_expand_diff_idents_carries_count(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        edi = [a for a in actions if a["name"] == "expand_diff_idents"]
+        if edi:
+            self.assertIn("ident_count", edi[0])
+            self.assertGreater(edi[0]["ident_count"], 0)
+
+
+# ---------------------------------------------------------------------------
+# Tests: change-mode apply_refinement
+# ---------------------------------------------------------------------------
+
+
+class TestChangeModeApply(unittest.TestCase):
+    def test_focus_changed_increases_evidence_files(self):
+        action = {
+            "name": "focus_changed_files",
+            "changed_targets": [
+                {"path": "a.py", "line": 1},
+                {"path": "b.py", "line": 2},
+            ],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 7)
+
+    def test_focus_changed_stores_force_paths(self):
+        action = {
+            "name": "focus_changed_files",
+            "changed_targets": [{"path": "a.py", "line": 1}],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["_force_slice_paths"], ["a.py"])
+
+    def test_expand_diff_idents_bumps_cap(self):
+        action = {"name": "expand_diff_idents", "ident_count": 15}
+        params = {"ident_cap": 20}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["ident_cap"], 30)
+
+    def test_expand_diff_idents_caps_at_50(self):
+        action = {"name": "expand_diff_idents", "ident_count": 30}
+        params = {"ident_cap": 45}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["ident_cap"], 50)
+
+    def test_expand_diff_idents_default_cap(self):
+        action = {"name": "expand_diff_idents", "ident_count": 10}
+        params = {}  # no ident_cap set
+        new = apply_refinement(params, action)
+        self.assertEqual(new["ident_cap"], 30)  # 20 default + 10
+
+
+# ---------------------------------------------------------------------------
+# Tests: change-mode execution
+# ---------------------------------------------------------------------------
+
+
+class TestChangeModeExecution(unittest.TestCase):
+    def _build_fn_change(self, **kwargs) -> dict:
+        """Mock build fn that adds changed file slices when forced."""
+        force_paths = kwargs.get("_force_slice_paths", [])
+        slices = []
+        for fp in force_paths:
+            slices.append({"path": fp, "start": 1, "lines": ["..."] * 20})
+
+        return {
+            "version": 2,
+            "mode": "change",
+            "repo": kwargs.get("repo", "org/repo"),
+            "request_id": "",
+            "query": "",
+            "ranked_sources": [
+                {"path": "src/config.py", "line": 10, "score": 0.0},
+                {"path": "src/server.py", "line": 5, "score": 0.0},
+            ],
+            "matches": [],
+            "slices": slices,
+            "symbols": [],
+            "diff": _SAMPLE_DIFF,
+            "suggested_commands": [],
+            "notes": ["2 file(s) changed"],
+            "truncated": False,
+        }
+
+    def test_pass_records_include_change_details(self):
+        b = _change_bundle(changed_in_slices=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_change,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        self.assertGreater(len(result["passes"]), 0)
+        p = result["passes"][0]
+        fcf = [d for d in p["action_details"] if d["name"] == "focus_changed_files"]
+        self.assertEqual(len(fcf), 1)
+        self.assertIn("changed_targets", fcf[0])
+
+    def test_changed_slices_added_after_execution(self):
+        b = _change_bundle(changed_in_slices=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_change,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        final = result["final_bundle"]
+        slice_paths = [s["path"] for s in final["slices"]]
+        self.assertIn("src/config.py", slice_paths)
+        self.assertIn("src/server.py", slice_paths)
 
 
 if __name__ == "__main__":

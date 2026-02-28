@@ -13,6 +13,8 @@ Mode-specific actions:
   - force_trace_slices: (error) ensure slices cover trace locations
   - pin_def_slices: (symbol) ensure slices cover definition files
   - expand_callers: (symbol) add slices for uncovered caller files
+  - expand_diff_idents: (change) fetch defs for identifiers from diff hunks
+  - focus_changed_files: (change) ensure slices cover all changed files
 
 Each pass produces a new bundle stored in sidecar.passes[].
 Stops when confidence is sufficient or budget is exhausted.
@@ -100,6 +102,26 @@ def _action_expand_callers(
     }
 
 
+def _action_expand_diff_idents(
+    ident_count: int,
+) -> Dict[str, Any]:
+    return {
+        "name": "expand_diff_idents",
+        "description": "Increase identifier cap to find impacted definitions",
+        "ident_count": ident_count,
+    }
+
+
+def _action_focus_changed_files(
+    uncovered_changed: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "name": "focus_changed_files",
+        "description": "Ensure slices cover all changed files from the diff",
+        "changed_targets": uncovered_changed,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
@@ -144,6 +166,16 @@ def plan_refinements(
         uncov_callers = _find_uncovered_caller_files(bundle)
         if uncov_callers:
             actions.append(_action_expand_callers(uncov_callers))
+
+    elif mode == "change":
+        uncov_changed = _find_uncovered_changed_files(bundle)
+        if uncov_changed:
+            actions.append(_action_focus_changed_files(uncov_changed))
+        ident_count = _count_diff_idents(bundle)
+        # If diff has identifiers but slice/symbol coverage is low,
+        # expand the identifier search cap
+        if ident_count > 0 and signals.get("slice_coverage", 0.0) < 0.1:
+            actions.append(_action_expand_diff_idents(ident_count))
 
     # --- Generic actions ---
 
@@ -258,6 +290,52 @@ def _find_uncovered_caller_files(
     return uncovered
 
 
+def _find_uncovered_changed_files(
+    bundle: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Find changed files (from change-mode sources) that lack slices.
+
+    In change mode, ranked_sources are the changed files from the diff.
+    Returns those not covered by slices.
+    """
+    sources = bundle.get("ranked_sources", [])
+    slice_paths = {s.get("path", "") for s in bundle.get("slices", [])}
+    uncovered = []
+    seen: set = set()
+    for src in sources:
+        path = src.get("path", "")
+        if path and path not in slice_paths and path not in seen:
+            seen.add(path)
+            uncovered.append({"path": path, "line": src.get("line", 1)})
+    return uncovered
+
+
+def _count_diff_idents(bundle: Dict[str, Any]) -> int:
+    """Estimate how many diff-identifiers are visible in the bundle.
+
+    Counts unique identifier-like tokens from match snippets that
+    overlap with the diff. Uses a simple heuristic: words that look
+    like function/class names in snippets of changed files.
+    """
+    import re
+
+    diff_text = bundle.get("diff", "")
+    if not diff_text:
+        return 0
+
+    # Extract added/removed lines from diff (lines starting with + or -)
+    ident_re = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{2,})\b")
+    idents: set = set()
+    for line in diff_text.splitlines():
+        if line.startswith("+") or line.startswith("-"):
+            if line.startswith("+++") or line.startswith("---"):
+                continue
+            for m in ident_re.finditer(line):
+                idents.add(m.group(1))
+
+    return len(idents)
+
+
 def apply_refinement(
     params: Dict[str, Any],
     action: Dict[str, Any],
@@ -313,6 +391,20 @@ def apply_refinement(
         new_params["_force_slice_paths"] = existing + [
             t["path"] for t in targets
         ]
+
+    elif name == "focus_changed_files":
+        targets = action.get("changed_targets", [])
+        current = new_params.get("evidence_files", 5)
+        extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
+        new_params["evidence_files"] = min(current + extra, 15)
+        new_params["_force_slice_paths"] = [
+            t["path"] for t in targets
+        ]
+
+    elif name == "expand_diff_idents":
+        # Bump the identifier cap by 10 (from default ~20 to 30)
+        current_cap = new_params.get("ident_cap", 20)
+        new_params["ident_cap"] = min(current_cap + 10, 50)
 
     # try_symbol doesn't change search params — it triggers a
     # separate ctags lookup in execute_refinements
@@ -396,6 +488,12 @@ def execute_refinements(
                 targets = a.get("caller_targets", [])
                 record["caller_targets"] = [t["path"] for t in targets]
                 record["caller_targets_count"] = len(targets)
+            elif a["name"] == "focus_changed_files":
+                targets = a.get("changed_targets", [])
+                record["changed_targets"] = [t["path"] for t in targets]
+                record["changed_targets_count"] = len(targets)
+            elif a["name"] == "expand_diff_idents":
+                record["ident_count"] = a.get("ident_count", 0)
             action_records.append(record)
 
         pass_record: Dict[str, Any] = {
