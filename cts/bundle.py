@@ -244,6 +244,7 @@ def build_default_bundle(
     debug: bool = False,
     explain_top: int = 10,
     ctags_info: Optional[Dict[str, Any]] = None,
+    diff_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
     timer = _Timer()
@@ -257,6 +258,13 @@ def build_default_bundle(
     # Structural heuristic: pass query as symbol if it looks like one
     q_sym = query if _looks_like_symbol(query) else None
 
+    # Diff context for change-aware ranking
+    diff_ctx = None
+    if diff_text:
+        from cts.diff_context import build_diff_context
+
+        diff_ctx = build_diff_context(diff_text)
+
     # Rank matches
     score_cards = None
     if debug:
@@ -268,6 +276,7 @@ def build_default_bundle(
             explain=True,
             ctags_info=ctags_info,
             query_symbol=q_sym,
+            diff_context=diff_ctx,
         )
     else:
         ranked = rank_matches(
@@ -277,6 +286,7 @@ def build_default_bundle(
             repo_root=repo_root,
             ctags_info=ctags_info,
             query_symbol=q_sym,
+            diff_context=diff_ctx,
         )
     timer.lap("ranking")
 
@@ -327,6 +337,7 @@ def build_error_bundle(
     debug: bool = False,
     explain_top: int = 10,
     ctags_info: Optional[Dict[str, Any]] = None,
+    diff_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an error-aware evidence bundle.
 
@@ -353,6 +364,13 @@ def build_error_bundle(
     # Structural heuristic: pass query as symbol if it looks like one
     q_sym = query if _looks_like_symbol(query) else None
 
+    # Diff context for change-aware ranking
+    diff_ctx = None
+    if diff_text:
+        from cts.diff_context import build_diff_context
+
+        diff_ctx = build_diff_context(diff_text)
+
     # Rank with trace boost
     score_cards = None
     if debug:
@@ -365,6 +383,7 @@ def build_error_bundle(
             explain=True,
             ctags_info=ctags_info,
             query_symbol=q_sym,
+            diff_context=diff_ctx,
         )
     else:
         ranked = rank_matches(
@@ -375,6 +394,7 @@ def build_error_bundle(
             repo_root=repo_root,
             ctags_info=ctags_info,
             query_symbol=q_sym,
+            diff_context=diff_ctx,
         )
     timer.lap("ranking")
 

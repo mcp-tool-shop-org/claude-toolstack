@@ -259,6 +259,7 @@ def rank_matches(
     explain: bool = False,
     ctags_info: Optional[Dict[str, Any]] = None,
     query_symbol: Optional[str] = None,
+    diff_context: Optional[Dict[str, Any]] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Re-rank matches using path score + trace boost + recency + structural.
 
@@ -273,6 +274,11 @@ def rank_matches(
 
     *query_symbol* enables structural heuristics (def/export detection)
     on match snippets. Only effective when a symbol name is provided.
+
+    *diff_context* is an optional dict from build_diff_context() with:
+      - changed_files: set of file paths from the diff
+      - hunk_ranges: dict mapping path -> list of (start, end) tuples
+      - changed_identifiers: set of identifier tokens from + lines
     """
     trace_set = set()
     if trace_files:
@@ -289,6 +295,15 @@ def rank_matches(
         ctags_def_files = ctags_info.get("def_files", set())
         ctags_kind_w = ctags_info.get("kind_weight", 0.0)
         ctags_best_kind = ctags_info.get("best_kind", "")
+
+    # Diff context data
+    diff_files: set = set()
+    diff_hunks: dict = {}
+    diff_idents: set = set()
+    if diff_context:
+        diff_files = diff_context.get("changed_files", set())
+        diff_hunks = diff_context.get("hunk_ranges", {})
+        diff_idents = diff_context.get("changed_identifiers", set())
 
     scored = []
     cards: List[Dict[str, Any]] = []
@@ -352,6 +367,30 @@ def rank_matches(
                 export_boost = round(0.3 * struct_export_conf, 2)
                 caller_proximity_boost = round(0.2 * struct_call_conf, 2)
 
+        # Diff-aware signals
+        changed_file_boost = 0.0
+        hunk_overlap_boost = 0.0
+        diff_ident_def_boost = 0.0
+        is_changed_file = False
+        is_in_hunk = False
+        if diff_files:
+            norm_path = path.replace("\\", "/")
+            if norm_path in diff_files:
+                changed_file_boost = 0.4
+                is_changed_file = True
+                # Hunk overlap check
+                match_line = m.get("line", 0)
+                if match_line and diff_hunks:
+                    from cts.diff_context import is_in_hunk as _hunk_check
+
+                    if _hunk_check(norm_path, match_line, diff_hunks):
+                        hunk_overlap_boost = 0.3
+                        is_in_hunk = True
+            # Identifier-in-diff boost: symbol is a changed ident + def
+            if query_symbol and diff_idents and is_prob_def:
+                if query_symbol in diff_idents:
+                    diff_ident_def_boost = 0.5
+
         total = (
             path_total
             + trace_boost
@@ -361,6 +400,9 @@ def rank_matches(
             + def_likeness_boost
             + export_boost
             + caller_proximity_boost
+            + changed_file_boost
+            + hunk_overlap_boost
+            + diff_ident_def_boost
         )
         scored.append((total, m))
 
@@ -381,6 +423,9 @@ def rank_matches(
                         "def_likeness_boost": def_likeness_boost,
                         "export_boost": export_boost,
                         "caller_proximity_boost": caller_proximity_boost,
+                        "changed_file_boost": changed_file_boost,
+                        "hunk_overlap_boost": hunk_overlap_boost,
+                        "diff_ident_def_boost": diff_ident_def_boost,
                     },
                     "features": {
                         "classification": path_detail["classification"],
@@ -390,6 +435,8 @@ def rank_matches(
                         "is_prob_def": is_prob_def,
                         "is_prob_export": is_prob_export,
                         "is_prob_call": is_prob_call,
+                        "is_changed_file": is_changed_file,
+                        "is_in_hunk": is_in_hunk,
                         "struct_rule": struct_rule,
                         "struct_def_conf": struct_def_conf,
                         "struct_export_conf": struct_export_conf,

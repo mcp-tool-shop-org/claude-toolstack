@@ -240,6 +240,9 @@ class TestRankMatchesExplain(unittest.TestCase):
             "def_likeness_boost",
             "export_boost",
             "caller_proximity_boost",
+            "changed_file_boost",
+            "hunk_overlap_boost",
+            "diff_ident_def_boost",
         ]:
             self.assertIn(key, signals)
         # Feature keys
@@ -252,6 +255,8 @@ class TestRankMatchesExplain(unittest.TestCase):
             "is_prob_def",
             "is_prob_export",
             "is_prob_call",
+            "is_changed_file",
+            "is_in_hunk",
             "struct_rule",
             "struct_def_conf",
             "struct_export_conf",
@@ -532,6 +537,106 @@ class TestStructuralRankingSignals(unittest.TestCase):
         card = cards[0]
         self.assertGreater(card["signals"]["caller_proximity_boost"], 0.0)
         self.assertTrue(card["features"]["is_prob_call"])
+
+
+class TestDiffAwareRankingSignals(unittest.TestCase):
+    """Diff-context signals: changed files, hunk overlap, identifier defs."""
+
+    def _diff_ctx(self):
+        return {
+            "changed_files": {"src/auth.py"},
+            "hunk_ranges": {"src/auth.py": [(10, 20)]},
+            "changed_identifiers": {"login", "validate"},
+        }
+
+    def test_changed_file_boost(self):
+        """Match in a changed file should get boosted."""
+        matches = [
+            {"path": "src/other.py", "line": 5, "snippet": "x"},
+            {"path": "src/auth.py", "line": 15, "snippet": "x"},
+        ]
+        ranked = rank_matches(matches, diff_context=self._diff_ctx())
+        self.assertEqual(ranked[0]["path"], "src/auth.py")
+
+    def test_hunk_overlap_boost(self):
+        """Match near a hunk should get extra boost."""
+        matches = [
+            {
+                "path": "src/auth.py",
+                "line": 50,
+                "snippet": "x",
+            },
+            {
+                "path": "src/auth.py",
+                "line": 15,
+                "snippet": "x",
+            },
+        ]
+        _, cards = rank_matches(matches, diff_context=self._diff_ctx(), explain=True)
+        in_hunk = [c for c in cards if c["line"] == 15][0]
+        far_away = [c for c in cards if c["line"] == 50][0]
+        self.assertGreater(
+            in_hunk["signals"]["hunk_overlap_boost"],
+            far_away["signals"]["hunk_overlap_boost"],
+        )
+
+    def test_diff_ident_def_boost(self):
+        """Def of a changed identifier should get boosted."""
+        matches = [
+            {
+                "path": "src/auth.py",
+                "line": 10,
+                "snippet": "def login(user):",
+            },
+        ]
+        _, cards = rank_matches(
+            matches,
+            query_symbol="login",
+            diff_context=self._diff_ctx(),
+            explain=True,
+        )
+        card = cards[0]
+        self.assertGreater(card["signals"]["diff_ident_def_boost"], 0.0)
+
+    def test_no_diff_context_no_boost(self):
+        """Without diff_context, diff signals should be zero."""
+        matches = [
+            {"path": "src/auth.py", "line": 15, "snippet": "x"},
+        ]
+        _, cards = rank_matches(matches, explain=True)
+        card = cards[0]
+        self.assertEqual(card["signals"]["changed_file_boost"], 0.0)
+        self.assertEqual(card["signals"]["hunk_overlap_boost"], 0.0)
+        self.assertEqual(card["signals"]["diff_ident_def_boost"], 0.0)
+
+    def test_explain_features_include_diff(self):
+        """Score cards should include diff feature flags."""
+        matches = [
+            {"path": "src/auth.py", "line": 15, "snippet": "x"},
+        ]
+        _, cards = rank_matches(matches, diff_context=self._diff_ctx(), explain=True)
+        card = cards[0]
+        self.assertTrue(card["features"]["is_changed_file"])
+        self.assertTrue(card["features"]["is_in_hunk"])
+
+    def test_signal_sum_includes_diff(self):
+        """Total score should include all diff signals."""
+        matches = [
+            {
+                "path": "src/auth.py",
+                "line": 15,
+                "snippet": "def login(user):",
+            },
+        ]
+        _, cards = rank_matches(
+            matches,
+            query_symbol="login",
+            diff_context=self._diff_ctx(),
+            explain=True,
+        )
+        card = cards[0]
+        expected = sum(card["signals"].values())
+        self.assertAlmostEqual(card["score_total"], expected, places=2)
 
 
 if __name__ == "__main__":
