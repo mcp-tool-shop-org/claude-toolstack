@@ -15,6 +15,8 @@ Usage:
   cts corpus ingest <dir> --out corpus.jsonl
   cts corpus report corpus.jsonl --format markdown --out report.md
   cts corpus patch tuning.json --repos-yaml repos.yaml --format diff
+  cts corpus apply tuning.json --repos-yaml repos.yaml [--dry-run]
+  cts corpus rollback rollback.json
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -565,6 +567,10 @@ def cmd_corpus(args: argparse.Namespace) -> None:
         _corpus_report(args)
     elif action == "patch":
         _corpus_patch(args)
+    elif action == "apply":
+        _corpus_apply(args)
+    elif action == "rollback":
+        _corpus_rollback(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -783,6 +789,119 @@ def _corpus_patch(args: argparse.Namespace) -> None:
         print(output)
 
 
+def _corpus_apply(args: argparse.Namespace) -> None:
+    from cts.corpus.apply import (
+        apply_patch_plan,
+        write_rollback,
+    )
+    from cts.corpus.patch import (
+        generate_patch_plan,
+        load_repos_yaml,
+        load_tuning,
+    )
+
+    tuning_path: str = args.tuning
+    repos_yaml_path: str = args.repos_yaml
+    allow_high_risk: bool = getattr(args, "allow_high_risk", False)
+    dry_run: bool = getattr(args, "dry_run", False)
+    rollback_path: str | None = getattr(args, "rollback_out", None)
+
+    try:
+        tuning = load_tuning(tuning_path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {tuning_path}", file=sys.stderr)
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        repos_yaml = load_repos_yaml(repos_yaml_path)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {repos_yaml_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    items = generate_patch_plan(tuning, repos_yaml)
+    result = apply_patch_plan(
+        repos_yaml,
+        items,
+        repos_yaml_path=repos_yaml_path,
+        allow_high_risk=allow_high_risk,
+        dry_run=dry_run,
+    )
+
+    # Report
+    if result["blocked"]:
+        for reason in result["blocked"]:
+            print(f"BLOCKED: {reason}", file=sys.stderr)
+        raise SystemExit(1)
+
+    applied = result["applied"]
+    skipped = result["skipped"]
+    prefix = "[DRY RUN] " if dry_run else ""
+
+    print(
+        f"{prefix}Applied:  {len(applied)} patch(es)",
+        file=sys.stderr,
+    )
+    print(
+        f"{prefix}Skipped:  {len(skipped)} patch(es)",
+        file=sys.stderr,
+    )
+
+    if result.get("backup_path"):
+        print(
+            f"Backup:   {result['backup_path']}",
+            file=sys.stderr,
+        )
+
+    # Write rollback artifact
+    if result.get("rollback") and rollback_path:
+        write_rollback(result["rollback"], rollback_path)
+        print(
+            f"Rollback: {rollback_path}",
+            file=sys.stderr,
+        )
+    elif result.get("rollback") and not rollback_path:
+        # Default rollback path
+        default_rb = "rollback.json"
+        write_rollback(result["rollback"], default_rb)
+        print(
+            f"Rollback: {default_rb}",
+            file=sys.stderr,
+        )
+
+
+def _corpus_rollback(args: argparse.Namespace) -> None:
+    from cts.corpus.apply import rollback_from_record
+
+    rollback_path: str = args.rollback_file
+
+    try:
+        with open(rollback_path, encoding="utf-8") as f:
+            record = json.load(f)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {rollback_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    success = rollback_from_record(record)
+    if success:
+        repos_path = record.get("repos_yaml_path", "repos.yaml")
+        print(f"Rolled back {repos_path} from backup", file=sys.stderr)
+    else:
+        print("Error: rollback failed — backup not found", file=sys.stderr)
+        raise SystemExit(1)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -991,6 +1110,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Write patch plan to file (default: stdout)",
+    )
+
+    # corpus apply
+    p_ca = corpus_sub.add_parser(
+        "apply",
+        help="Apply tuning recommendations to repos.yaml",
+    )
+    p_ca.add_argument(
+        "tuning",
+        help="Path to tuning recommendations JSON",
+    )
+    p_ca.add_argument(
+        "--repos-yaml",
+        default="repos.yaml",
+        help="Path to repos.yaml (default: repos.yaml)",
+    )
+    p_ca.add_argument(
+        "--allow-high-risk",
+        action="store_true",
+        default=False,
+        help="Apply high-risk patches (default: blocked)",
+    )
+    p_ca.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Compute changes but don't write to disk",
+    )
+    p_ca.add_argument(
+        "--rollback-out",
+        default=None,
+        metavar="PATH",
+        help="Write rollback record to PATH (default: rollback.json)",
+    )
+
+    # corpus rollback
+    p_crb = corpus_sub.add_parser(
+        "rollback",
+        help="Rollback a previous apply from rollback record",
+    )
+    p_crb.add_argument(
+        "rollback_file",
+        help="Path to rollback.json from a previous apply",
     )
 
     return parser

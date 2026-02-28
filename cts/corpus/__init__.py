@@ -11,6 +11,13 @@ from cts.corpus.model import CorpusRecord, PassRecord
 from cts.corpus.report import generate_report
 from cts.corpus.scan import scan_dir
 from cts.corpus.store import write_corpus, write_passes
+from cts.corpus.apply import (
+    RollbackRecord,
+    apply_patch_plan,
+    check_risk_gate,
+    rollback_from_backup,
+    rollback_from_record,
+)
 from cts.corpus.patch import (
     PatchItem,
     generate_patch_plan,
@@ -37,9 +44,14 @@ __all__ = [
     "render_plan_json",
     "render_plan_diff",
     "render_plan_text",
+    "apply_patch_plan",
+    "check_risk_gate",
+    "rollback_from_backup",
+    "rollback_from_record",
     "CorpusRecord",
     "PassRecord",
     "PatchItem",
+    "RollbackRecord",
     "TuningEnvelope",
     "TuningRecommendation",
 ]
