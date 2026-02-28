@@ -1,0 +1,66 @@
+name: Corpus Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: 'Artifact name pattern to download (default: latest sidecar)'
+        required: false
+        default: 'sidecar-evidence-*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cts
+        run: pip install -e .
+
+      - name: Generate test sidecar artifact
+        run: |
+          # Produce a fresh sidecar from the current codebase
+          mkdir -p artifacts
+          python scripts/gen_test_sidecar.py artifacts/ci-artifact.json
+
+      - name: Ingest corpus
+        run: |
+          cts corpus ingest artifacts/ \
+            --out corpus.jsonl \
+            --include-passes
+
+      - name: Generate markdown report
+        run: |
+          cts corpus report corpus.jsonl \
+            --format markdown \
+            --out report.md
+
+      - name: Generate JSON report
+        run: |
+          cts corpus report corpus.jsonl \
+            --format json \
+            --out report.json
+
+      - name: Print report summary
+        run: |
+          cts corpus report corpus.jsonl --format text
+
+      - name: Upload corpus artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-report-${{ github.sha }}
+          path: |
+            corpus.jsonl
+            corpus_passes.jsonl
+            report.md
+            report.json
+          retention-days: 90
