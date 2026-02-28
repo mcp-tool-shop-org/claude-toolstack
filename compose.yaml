@@ -1,0 +1,126 @@
+# Claude Toolstack — Docker Compose
+# Resource-governed tool farm for Claude Code + large repo workflows.
+#
+# Host prerequisites:
+#   - cgroup v2 active (default Ubuntu 21.10+, Fedora 31+)
+#   - systemd slices installed (see systemd/ directory)
+#   - /workspace/repos populated with org/repo trees
+#   - .env file created from .env.example
+#
+# Usage:
+#   docker compose up -d --build
+#   docker compose logs -f gateway
+
+services:
+  # ----------------------------------------------------------------
+  # Docker Socket Proxy — gateway never touches raw socket
+  # Only CONTAINERS + EXEC allowed; everything else denied.
+  # ----------------------------------------------------------------
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: claude-dockerproxy
+    environment:
+      - CONTAINERS=1
+      - EXEC=1
+      - POST=1
+      - IMAGES=0
+      - SERVICES=0
+      - SYSTEM=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - INFO=0
+      - AUTH=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [tools-net]
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------
+  # Gateway — thin FastAPI service, 6 endpoints + hardening
+  # Contains ripgrep locally; delegates ctags/builds via docker exec.
+  # ----------------------------------------------------------------
+  gateway:
+    build: ./gateway
+    container_name: claude-gateway
+    env_file: .env
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: gw-cache
+        target: /cache
+      - type: volume
+        source: gw-audit
+        target: /audit
+    ports:
+      - "127.0.0.1:8088:8088"
+    networks: [tools-net]
+    mem_limit: 1g
+    cpus: "2"
+    cgroup_parent: "claude-index.slice"
+    restart: unless-stopped
+    depends_on:
+      - dockerproxy
+
+  # ----------------------------------------------------------------
+  # Indexer — universal-ctags, generates tags into shared cache volume
+  # ----------------------------------------------------------------
+  ctags:
+    image: universalctags/ctags:latest
+    container_name: claude-ctags
+    init: true
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["echo 'ctags container ready'; sleep infinity"]
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: gw-cache
+        target: /gwcache
+    networks: [tools-net]
+    mem_limit: 4g
+    cpus: "4"
+    cgroup_parent: "claude-index.slice"
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------
+  # Build runner — generic toolchain container for test/build/lint
+  # Mount repos read-write (builds may write artifacts).
+  # ----------------------------------------------------------------
+  build:
+    image: ubuntu:24.04
+    container_name: claude-build
+    init: true
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      apt-get update -qq &&
+      apt-get install -y -qq --no-install-recommends
+        curl git ca-certificates build-essential &&
+      echo 'build runner ready' &&
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+      - type: volume
+        source: build-cache
+        target: /var/cache/build
+    networks: [tools-net]
+    mem_limit: 12g
+    cpus: "8"
+    cgroup_parent: "claude-build.slice"
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    restart: unless-stopped
+
+networks:
+  tools-net: {}
+
+volumes:
+  gw-cache: {}
+  gw-audit: {}
+  build-cache: {}

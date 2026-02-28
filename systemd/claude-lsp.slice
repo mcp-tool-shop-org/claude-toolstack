@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude tool farm — language servers slice
+
+[Slice]
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+
+# Medium-repo defaults — tune per workload
+MemoryHigh=8G
+MemoryMax=16G
+MemorySwapMax=8G
+IOWeight=60
