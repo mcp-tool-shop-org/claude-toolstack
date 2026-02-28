@@ -202,3 +202,33 @@ jobs:
             fi
             echo "OK: $f"
           done
+
+      - name: Verify sidecar schema version is pinned
+        run: |
+          # Ensure BUNDLE_SCHEMA_VERSION is defined and is an integer
+          VERSION=$(python3 -c "
+          import ast, sys
+          with open('cts/schema.py') as f:
+              tree = ast.parse(f.read())
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Assign):
+                  for t in node.targets:
+                      if isinstance(t, ast.Name) and t.id == 'BUNDLE_SCHEMA_VERSION':
+                          if isinstance(node.value, ast.Constant) and isinstance(node.value.value, int):
+                              print(node.value.value)
+                              sys.exit(0)
+          print('NOT_FOUND', file=sys.stderr)
+          sys.exit(1)
+          ")
+          echo "OK: BUNDLE_SCHEMA_VERSION=$VERSION"
+
+      - name: Verify secrets patterns cover critical types
+        run: |
+          # Ensure the secrets scanner covers minimum required patterns
+          for PATTERN in "GitHub Token" "AWS Access Key" "Private Key Block" "Generic Secret"; do
+            if ! grep -q "$PATTERN" cts/sidecar.py; then
+              echo "FAIL: secrets scanner missing pattern: $PATTERN"
+              exit 1
+            fi
+            echo "OK: $PATTERN pattern present"
+          done
