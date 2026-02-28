@@ -57,9 +57,7 @@ REQUEST_TIMEOUT_SEC = float(os.getenv("REQUEST_TIMEOUT_SEC", "20"))
 DOCKER_HOST = os.getenv("DOCKER_HOST", "")
 
 ALLOWED_CONTAINERS = {
-    c.strip()
-    for c in os.getenv("ALLOWED_CONTAINERS", "").split(",")
-    if c.strip()
+    c.strip() for c in os.getenv("ALLOWED_CONTAINERS", "").split(",") if c.strip()
 }
 
 RG_CONCURRENCY = int(os.getenv("RG_CONCURRENCY", "2"))
@@ -70,21 +68,19 @@ job_sem = asyncio.Semaphore(JOB_CONCURRENCY)
 
 # Per-repo access control
 ALLOWED_REPOS = [
-    s.strip()
-    for s in os.getenv("ALLOWED_REPOS", "").split(",")
-    if s.strip()
+    s.strip() for s in os.getenv("ALLOWED_REPOS", "").split(",") if s.strip()
 ]
 DENIED_REPOS = [
-    s.strip()
-    for s in os.getenv("DENIED_REPOS", "").split(",")
-    if s.strip()
+    s.strip() for s in os.getenv("DENIED_REPOS", "").split(",") if s.strip()
 ]
 
 # Rate limiting
 RATE_LIMIT_RPS = float(os.getenv("RATE_LIMIT_RPS", "2"))
 RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "10"))
 RATE_LIMIT_SCOPE = os.getenv("RATE_LIMIT_SCOPE", "key").lower()
-RATE_LIMIT_BACKEND = os.getenv("RATE_LIMIT_BACKEND", "memory").lower()  # "memory" or "redis"
+RATE_LIMIT_BACKEND = os.getenv(
+    "RATE_LIMIT_BACKEND", "memory"
+).lower()  # "memory" or "redis"
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Audit logging
@@ -114,7 +110,7 @@ REPOS_YAML_PATH = os.getenv("REPOS_YAML_PATH", "/app/repos.yaml")
 
 _metrics = {
     "requests_total": 0,
-    "requests_by_status": {},   # status_code -> count
+    "requests_by_status": {},  # status_code -> count
     "rate_limit_429": 0,
     "docker_exec_total": 0,
     "docker_exec_errors": 0,
@@ -155,6 +151,7 @@ def audit(event: Dict[str, Any]) -> None:
 # Rate limiter (token bucket)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _Bucket:
     tokens: float
@@ -173,10 +170,13 @@ def _get_redis():
     if _redis_client is None:
         try:
             import redis
+
             _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
             _redis_client.ping()
         except Exception as e:
-            logging.warning(f"Redis rate limiter unavailable, falling back to memory: {e}")
+            logging.warning(
+                f"Redis rate limiter unavailable, falling back to memory: {e}"
+            )
             return None
     return _redis_client
 
@@ -267,6 +267,7 @@ app = FastAPI(title="Claude Tooling Gateway", version="0.1.0")
 # Request models
 # ---------------------------------------------------------------------------
 
+
 class RgSearchRequest(BaseModel):
     repo: str = Field(..., description="org/repo identifier")
     query: str
@@ -307,6 +308,7 @@ class RunJobRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Auth + security helpers
 # ---------------------------------------------------------------------------
+
 
 def _require_api_key(key: str) -> None:
     if not API_KEY:
@@ -376,9 +378,7 @@ def _resolve_file_path(repo_path: Path, rel_path: str) -> Path:
     return resolved
 
 
-def _truncate_bytes(
-    data: bytes, limit: int = MAX_RESPONSE_BYTES
-) -> Tuple[bytes, bool]:
+def _truncate_bytes(data: bytes, limit: int = MAX_RESPONSE_BYTES) -> Tuple[bytes, bool]:
     if len(data) <= limit:
         return data, False
     return data[:limit], True
@@ -394,13 +394,9 @@ def _cache_dir_for(repo_norm: str) -> Path:
 
 def _ensure_container_allowed(name: str) -> None:
     if not ALLOWED_CONTAINERS:
-        raise HTTPException(
-            status_code=500, detail="ALLOWED_CONTAINERS not configured"
-        )
+        raise HTTPException(status_code=500, detail="ALLOWED_CONTAINERS not configured")
     if name not in ALLOWED_CONTAINERS:
-        raise HTTPException(
-            status_code=403, detail=f"Container not allowed: {name}"
-        )
+        raise HTTPException(status_code=403, detail=f"Container not allowed: {name}")
 
 
 def _sh_quote(s: str) -> str:
@@ -448,20 +444,20 @@ def _path_relative_to_repo(path_text: str, repo_path: Path) -> str:
 # Docker client
 # ---------------------------------------------------------------------------
 
+
 def _get_docker_client():
     try:
         if DOCKER_HOST:
             return docker.DockerClient(base_url=DOCKER_HOST)
         return docker.from_env()
     except DockerException as e:
-        raise HTTPException(
-            status_code=500, detail=f"Docker client error: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"Docker client error: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Subprocess / Docker exec
 # ---------------------------------------------------------------------------
+
 
 async def _run_subprocess(cmd: List[str], timeout: float) -> str:
     proc = await asyncio.create_subprocess_exec(
@@ -481,12 +477,14 @@ async def _docker_exec(
     container_name: str, cmd: List[str], timeout: int
 ) -> Tuple[int, str, str]:
     _metrics["docker_exec_total"] += 1
-    audit({
-        "type": "docker_exec",
-        "container": container_name,
-        "cmd": cmd,
-        "timeout_sec": timeout,
-    })
+    audit(
+        {
+            "type": "docker_exec",
+            "container": container_name,
+            "cmd": cmd,
+            "timeout_sec": timeout,
+        }
+    )
 
     client = _get_docker_client()
     try:
@@ -516,9 +514,7 @@ async def _docker_exec(
             return 125, "", f"Exec error: {e}"
 
     try:
-        rc, out, err = await asyncio.wait_for(
-            asyncio.to_thread(_run), timeout=timeout
-        )
+        rc, out, err = await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
     except asyncio.TimeoutError:
         _metrics["docker_exec_errors"] += 1
         raise HTTPException(
@@ -527,13 +523,15 @@ async def _docker_exec(
 
     if rc != 0:
         _metrics["docker_exec_errors"] += 1
-    audit({
-        "type": "docker_exec_result",
-        "container": container_name,
-        "exit_code": rc,
-        "stdout_len": len(out),
-        "stderr_len": len(err),
-    })
+    audit(
+        {
+            "type": "docker_exec_result",
+            "container": container_name,
+            "exit_code": rc,
+            "stdout_len": len(out),
+            "stderr_len": len(err),
+        }
+    )
     return rc, out, err
 
 
@@ -541,15 +539,14 @@ async def _docker_exec(
 # Middleware: auth + rate limit + audit
 # ---------------------------------------------------------------------------
 
+
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     start = time.time()
     x_api_key = request.headers.get("x-api-key", "")
     client_ip = request.client.host if request.client else "unknown"
     key_hash = (
-        hashlib.sha256(x_api_key.encode("utf-8")).hexdigest()[:16]
-        if x_api_key
-        else ""
+        hashlib.sha256(x_api_key.encode("utf-8")).hexdigest()[:16] if x_api_key else ""
     )
 
     _metrics["requests_total"] += 1
@@ -562,40 +559,45 @@ async def security_middleware(request: Request, call_next):
         if e.status_code == 429:
             _metrics["rate_limit_429"] += 1
         sc = str(e.status_code)
-        _metrics["requests_by_status"][sc] = _metrics["requests_by_status"].get(sc, 0) + 1
-        audit({
-            "type": "http",
-            "ip": client_ip,
-            "key": key_hash,
-            "method": request.method,
-            "path": request.url.path,
-            "status": e.status_code,
-            "duration_sec": round(time.time() - start, 4),
-        })
-        return JSONResponse(
-            status_code=e.status_code, content={"detail": e.detail}
+        _metrics["requests_by_status"][sc] = (
+            _metrics["requests_by_status"].get(sc, 0) + 1
         )
+        audit(
+            {
+                "type": "http",
+                "ip": client_ip,
+                "key": key_hash,
+                "method": request.method,
+                "path": request.url.path,
+                "status": e.status_code,
+                "duration_sec": round(time.time() - start, 4),
+            }
+        )
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
     # Forward
     response = await call_next(request)
     duration = round(time.time() - start, 4)
     sc = str(response.status_code)
     _metrics["requests_by_status"][sc] = _metrics["requests_by_status"].get(sc, 0) + 1
-    audit({
-        "type": "http",
-        "ip": client_ip,
-        "key": key_hash,
-        "method": request.method,
-        "path": request.url.path,
-        "status": response.status_code,
-        "duration_sec": duration,
-    })
+    audit(
+        {
+            "type": "http",
+            "ip": client_ip,
+            "key": key_hash,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_sec": duration,
+        }
+    )
     return response
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/v1/status")
 def status():
@@ -676,15 +678,17 @@ async def rg_search(req: RgSearchRequest):
         snippet = data.get("lines", {}).get("text", "").rstrip("\n")
         if len(snippet) > 500:
             snippet = snippet[:500] + "\u2026"
-        matches.append({
-            "path": _path_relative_to_repo(path, repo_path),
-            "line": line_no,
-            "snippet": snippet,
-            "submatches": [
-                {"start": sm.get("start"), "end": sm.get("end")}
-                for sm in submatches
-            ],
-        })
+        matches.append(
+            {
+                "path": _path_relative_to_repo(path, repo_path),
+                "line": line_no,
+                "snippet": snippet,
+                "submatches": [
+                    {"start": sm.get("start"), "end": sm.get("end")}
+                    for sm in submatches
+                ],
+            }
+        )
         if len(matches) >= max_matches:
             break
 
@@ -753,7 +757,8 @@ async def ctags_index(req: CtagsIndexRequest):
     # ctags container mounts repos at /repos and gw-cache at /gwcache
     repo_in_container = f"/repos/{repo_id}"
     exec_cmd = [
-        "sh", "-c",
+        "sh",
+        "-c",
         (
             f"set -e; "
             f"mkdir -p /gwcache/{repo_norm}; "
@@ -813,12 +818,14 @@ async def ctags_query(req: CtagsQueryRequest):
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 3:
                 continue
-            results.append({
-                "name": parts[0],
-                "file": parts[1],
-                "excmd": parts[2],
-                "kind": parts[3] if len(parts) > 3 else None,
-            })
+            results.append(
+                {
+                    "name": parts[0],
+                    "file": parts[1],
+                    "excmd": parts[2],
+                    "kind": parts[3] if len(parts) > 3 else None,
+                }
+            )
             if len(results) >= max_results:
                 break
 
@@ -917,9 +924,21 @@ async def run_job(req: RunJobRequest):
             "container": "claude-build",
             "cwd": cwd,
             "commands": {
-                "test": ["sh", "-c", "cd $CWD && ./gradlew test --no-daemon -q 2>/dev/null || mvn test -q"],
-                "build": ["sh", "-c", "cd $CWD && ./gradlew build --no-daemon -q 2>/dev/null || mvn package -q"],
-                "lint": ["sh", "-c", "cd $CWD && ./gradlew spotlessCheck --no-daemon -q 2>/dev/null || mvn checkstyle:check -q"],
+                "test": [
+                    "sh",
+                    "-c",
+                    "cd $CWD && ./gradlew test --no-daemon -q 2>/dev/null || mvn test -q",
+                ],
+                "build": [
+                    "sh",
+                    "-c",
+                    "cd $CWD && ./gradlew build --no-daemon -q 2>/dev/null || mvn package -q",
+                ],
+                "lint": [
+                    "sh",
+                    "-c",
+                    "cd $CWD && ./gradlew spotlessCheck --no-daemon -q 2>/dev/null || mvn checkstyle:check -q",
+                ],
             },
             "timeout": 1200,
         },
@@ -947,8 +966,16 @@ async def run_job(req: RunJobRequest):
             "container": "claude-build",
             "cwd": cwd,
             "commands": {
-                "test": ["sh", "-c", "cd $CWD && cmake --build build && ctest --test-dir build -q"],
-                "build": ["sh", "-c", "cd $CWD && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build"],
+                "test": [
+                    "sh",
+                    "-c",
+                    "cd $CWD && cmake --build build && ctest --test-dir build -q",
+                ],
+                "build": [
+                    "sh",
+                    "-c",
+                    "cd $CWD && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build",
+                ],
                 "lint": ["sh", "-c", "cd $CWD && cmake-lint CMakeLists.txt"],
             },
             "timeout": 1200,
@@ -1006,6 +1033,7 @@ async def run_job(req: RunJobRequest):
 # ---------------------------------------------------------------------------
 # Metrics endpoint (Prometheus text format)
 # ---------------------------------------------------------------------------
+
 
 @app.get("/v1/metrics", response_class=PlainTextResponse)
 def metrics():

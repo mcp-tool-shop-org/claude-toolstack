@@ -57,6 +57,7 @@ jobs:
             -e ALLOWED_CONTAINERS=claude-ctags,claude-build \
             -e REPO_ROOT=/repos \
             -e CACHE_ROOT=/cache \
+            -e AUDIT_LOG_PATH=/tmp/audit.jsonl \
             -p 127.0.0.1:8088:8088 \
             claude-gateway:ci
 
