@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - 'gateway/**'
+      - 'compose.yaml'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'gateway/**'
+      - 'compose.yaml'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r gateway/requirements.txt
+          pip install ruff mypy types-PyYAML
+
+      - name: Ruff lint
+        run: ruff check gateway/
+
+      - name: Ruff format check
+        run: ruff format --check gateway/
+
+      - name: Mypy type check
+        run: mypy gateway/main.py --ignore-missing-imports --no-error-summary || true
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build gateway container
+        run: docker build -t claude-gateway:ci ./gateway
+
+      - name: Verify container starts
+        run: |
+          docker run -d --name gw-test \
+            -e API_KEY=ci-test-key \
+            -e ALLOWED_REPOS='*' \
+            -e ALLOWED_CONTAINERS=claude-ctags,claude-build \
+            -e REPO_ROOT=/repos \
+            -e CACHE_ROOT=/cache \
+            -p 127.0.0.1:8088:8088 \
+            claude-gateway:ci
+
+          # Wait for startup
+          sleep 3
+
+          # Health check
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: ci-test-key" \
+            http://127.0.0.1:8088/v1/status)
+          echo "Status endpoint returned: $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
+
+          # Auth enforcement
+          BAD=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: wrong" \
+            http://127.0.0.1:8088/v1/status)
+          echo "Bad key returned: $BAD"
+          [ "$BAD" = "401" ] || exit 1
+
+          # Metrics endpoint
+          METRICS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: ci-test-key" \
+            http://127.0.0.1:8088/v1/metrics)
+          echo "Metrics endpoint returned: $METRICS"
+          [ "$METRICS" = "200" ] || exit 1
+
+      - name: Container logs
+        if: failure()
+        run: docker logs gw-test
+
+  policy-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose structure
+        run: docker compose config --quiet
+
+      - name: Check docker socket proxy settings
+        run: |
+          # Verify dangerous endpoints are denied
+          for EP in IMAGES SERVICES SYSTEM NETWORKS VOLUMES AUTH; do
+            VAL=$(grep -A25 'dockerproxy:' compose.yaml | grep "$EP=" | head -1 | sed 's/.*=//;s/[^0-9]//g')
+            if [ "$VAL" != "0" ]; then
+              echo "FAIL: $EP should be 0, got '$VAL'"
+              exit 1
+            fi
+            echo "OK: $EP=0"
+          done
+
+      - name: Check gateway binds to loopback
+        run: |
+          if grep -q '0.0.0.0:8088' compose.yaml; then
+            echo "FAIL: Gateway must bind to 127.0.0.1, not 0.0.0.0"
+            exit 1
+          fi
+          echo "OK: Gateway bound to loopback"
+
+      - name: Validate systemd slice units
+        run: |
+          for f in systemd/claude-*.slice; do
+            if ! grep -q 'MemoryAccounting=yes' "$f"; then
+              echo "FAIL: $f missing MemoryAccounting"
+              exit 1
+            fi
+            if ! grep -q 'MemoryHigh=' "$f"; then
+              echo "FAIL: $f missing MemoryHigh"
+              exit 1
+            fi
+            echo "OK: $f"
+          done

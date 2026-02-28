@@ -1,0 +1,50 @@
+# repos.yaml — Declarative repo registry for Claude Toolstack.
+#
+# This file is the source of truth for:
+#   - Which repos are allowed (gateway reads ALLOWED_REPOS from .env,
+#     but this file drives onboarding and preset mapping)
+#   - Default job presets per repo
+#   - Repo-specific search excludes
+#   - LSP profile hints
+#
+# Usage:
+#   scripts/add-repo.sh reads this file to clone + configure repos.
+#   scripts/policy-lint.sh validates it against running config.
+#
+# Format:
+#   repos:
+#     org/repo:
+#       url: https://github.com/org/repo.git
+#       preset: node            # default job preset (node|python|rust|go|java|dotnet|pnpm|yarn|bazel|cmake)
+#       excludes: []            # extra rg excludes beyond defaults
+#       lsp: []                 # LSP profiles to enable (clangd|rust-analyzer|tsserver|pylsp|gopls|jdtls)
+#       notes: ""               # human notes
+
+repos:
+  # Example entries — replace with your actual repos:
+  #
+  # myorg/frontend:
+  #   url: https://github.com/myorg/frontend.git
+  #   preset: node
+  #   excludes:
+  #     - "generated/"
+  #     - "coverage/"
+  #   lsp: [tsserver]
+  #   notes: "React app, large node_modules"
+  #
+  # myorg/api-server:
+  #   url: https://github.com/myorg/api-server.git
+  #   preset: python
+  #   excludes:
+  #     - ".mypy_cache/"
+  #   lsp: [pylsp]
+  #
+  # myorg/engine:
+  #   url: https://github.com/myorg/engine.git
+  #   preset: rust
+  #   lsp: [rust-analyzer]
+  #
+  # myorg/infra:
+  #   url: https://github.com/myorg/infra.git
+  #   preset: go
+  #   lsp: [gopls]

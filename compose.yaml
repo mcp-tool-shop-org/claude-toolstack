@@ -48,6 +48,10 @@ services:
         source: /workspace/repos
         target: /repos
         read_only: true
+      - type: bind
+        source: ./repos.yaml
+        target: /app/repos.yaml
+        read_only: true
       - type: volume
         source: gw-cache
         target: /cache
@@ -117,6 +121,157 @@ services:
       - /tmp:size=2g,mode=1777
     restart: unless-stopped
 
+  # ----------------------------------------------------------------
+  # LSP services (opt-in via: docker compose --profile lsp up -d)
+  # Each gets its own cache volume and runs in claude-lsp.slice.
+  # ----------------------------------------------------------------
+  clangd:
+    image: silkeh/clangd:latest
+    container_name: claude-clangd
+    init: true
+    profiles: [lsp]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      mkdir -p /cache/clangd &&
+      echo 'clangd container ready' &&
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: clangd-cache
+        target: /cache
+    networks: [tools-net]
+    mem_limit: 10g
+    cpus: "6"
+    cgroup_parent: "claude-lsp.slice"
+    restart: unless-stopped
+
+  rust-analyzer:
+    image: rust:latest
+    container_name: claude-rust-analyzer
+    init: true
+    profiles: [lsp]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      rustup component add rust-analyzer 2>/dev/null || true;
+      echo 'rust-analyzer container ready';
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: ra-cache
+        target: /cache
+    networks: [tools-net]
+    mem_limit: 6g
+    cpus: "4"
+    cgroup_parent: "claude-lsp.slice"
+    restart: unless-stopped
+
+  tsserver:
+    image: node:20
+    container_name: claude-tsserver
+    init: true
+    profiles: [lsp]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      npm i -g typescript 2>/dev/null;
+      echo 'tsserver container ready';
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: ts-cache
+        target: /cache
+    networks: [tools-net]
+    mem_limit: 4g
+    cpus: "4"
+    cgroup_parent: "claude-lsp.slice"
+    restart: unless-stopped
+
+  pylsp:
+    image: python:3.12-slim
+    container_name: claude-pylsp
+    init: true
+    profiles: [lsp]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      pip install -q python-lsp-server 2>/dev/null;
+      echo 'pylsp container ready';
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: pylsp-cache
+        target: /cache
+    networks: [tools-net]
+    mem_limit: 4g
+    cpus: "4"
+    cgroup_parent: "claude-lsp.slice"
+    restart: unless-stopped
+
+  gopls:
+    image: golang:1.22
+    container_name: claude-gopls
+    init: true
+    profiles: [lsp]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      go install golang.org/x/tools/gopls@latest 2>/dev/null;
+      echo 'gopls container ready';
+      sleep infinity
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: gopls-cache
+        target: /cache
+    networks: [tools-net]
+    mem_limit: 4g
+    cpus: "4"
+    cgroup_parent: "claude-lsp.slice"
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------
+  # Reverse proxy (opt-in via: docker compose --profile remote up -d)
+  # Terminates TLS/mTLS and forwards to gateway on tools-net.
+  # ----------------------------------------------------------------
+  proxy:
+    image: nginx:alpine
+    container_name: claude-proxy
+    profiles: [remote]
+    volumes:
+      - type: bind
+        source: ./nginx
+        target: /etc/nginx/conf.d
+        read_only: true
+      # Mount certs for mTLS (create certs/ directory with server.crt, server.key, ca.crt)
+      # - type: bind
+      #   source: ./certs
+      #   target: /etc/nginx/certs
+      #   read_only: true
+    ports:
+      - "0.0.0.0:8443:8443"
+    networks: [tools-net]
+    mem_limit: 256m
+    cpus: "1"
+    restart: unless-stopped
+    depends_on:
+      - gateway
+
 networks:
   tools-net: {}
 
@@ -124,3 +279,8 @@ volumes:
   gw-cache: {}
   gw-audit: {}
   build-cache: {}
+  clangd-cache: {}
+  ra-cache: {}
+  ts-cache: {}
+  pylsp-cache: {}
+  gopls-cache: {}

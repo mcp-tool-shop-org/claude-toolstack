@@ -8,6 +8,7 @@ Endpoints:
   POST /v1/symbol/ctags  — query symbol defs from tags
   POST /v1/run/job       — run allowlisted test/build/lint
   GET  /v1/status        — health + config
+  GET  /v1/metrics       — Prometheus-format counters
 
 Security layers:
   - API key auth (x-api-key header)
@@ -34,9 +35,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import docker
+import yaml
 from docker.errors import APIError, DockerException, NotFound
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,8 @@ DENIED_REPOS = [
 RATE_LIMIT_RPS = float(os.getenv("RATE_LIMIT_RPS", "2"))
 RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", "10"))
 RATE_LIMIT_SCOPE = os.getenv("RATE_LIMIT_SCOPE", "key").lower()
+RATE_LIMIT_BACKEND = os.getenv("RATE_LIMIT_BACKEND", "memory").lower()  # "memory" or "redis"
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Audit logging
 AUDIT_LOG_PATH = os.getenv("AUDIT_LOG_PATH", "/audit/audit.jsonl")
@@ -100,6 +104,28 @@ DEFAULT_EXCLUDES = [
     ".cache/",
     "vendor/",
 ]
+
+# Repos config file (optional, for preset mapping + repo-specific excludes)
+REPOS_YAML_PATH = os.getenv("REPOS_YAML_PATH", "/app/repos.yaml")
+
+# ---------------------------------------------------------------------------
+# Metrics counters (lightweight, in-memory)
+# ---------------------------------------------------------------------------
+
+_metrics = {
+    "requests_total": 0,
+    "requests_by_status": {},   # status_code -> count
+    "rate_limit_429": 0,
+    "docker_exec_total": 0,
+    "docker_exec_errors": 0,
+    "truncations": 0,
+    "search_total": 0,
+    "slice_total": 0,
+    "ctags_index_total": 0,
+    "ctags_query_total": 0,
+    "job_total": 0,
+}
+_metrics_lock = asyncio.Lock()
 
 # ---------------------------------------------------------------------------
 # Audit logger
@@ -138,19 +164,42 @@ class _Bucket:
 _buckets: Dict[str, _Bucket] = {}
 _buckets_lock = asyncio.Lock()
 
+# Optional Redis client (lazy init)
+_redis_client = None
+
+
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis
+            _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            _redis_client.ping()
+        except Exception as e:
+            logging.warning(f"Redis rate limiter unavailable, falling back to memory: {e}")
+            return None
+    return _redis_client
+
 
 def _rl_key(api_key: str, client_ip: str) -> str:
     if RATE_LIMIT_SCOPE == "ip":
-        return f"ip:{client_ip}"
+        return f"rl:ip:{client_ip}"
     if RATE_LIMIT_SCOPE == "key+ip":
-        return f"keyip:{api_key}:{client_ip}"
-    return f"key:{api_key}"
+        return f"rl:keyip:{api_key}:{client_ip}"
+    return f"rl:key:{api_key}"
 
 
 async def _rate_limit_check(api_key: str, client_ip: str) -> None:
     if RATE_LIMIT_RPS <= 0 or RATE_LIMIT_BURST <= 0:
         return
 
+    if RATE_LIMIT_BACKEND == "redis":
+        await _rate_limit_redis(api_key, client_ip)
+    else:
+        await _rate_limit_memory(api_key, client_ip)
+
+
+async def _rate_limit_memory(api_key: str, client_ip: str) -> None:
     key = _rl_key(api_key, client_ip)
     now = time.time()
 
@@ -167,6 +216,44 @@ async def _rate_limit_check(api_key: str, client_ip: str) -> None:
         if b.tokens < 1.0:
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
         b.tokens -= 1.0
+
+
+async def _rate_limit_redis(api_key: str, client_ip: str) -> None:
+    """Token bucket via Redis MULTI/EXEC for multi-instance durability."""
+    r = _get_redis()
+    if r is None:
+        # Fallback to memory if Redis unavailable
+        return await _rate_limit_memory(api_key, client_ip)
+
+    key = _rl_key(api_key, client_ip)
+    now = time.time()
+    ttl = int(RATE_LIMIT_BURST / max(RATE_LIMIT_RPS, 0.01)) + 60
+
+    def _check():
+        pipe = r.pipeline(True)
+        try:
+            pipe.watch(key)
+            raw = pipe.hgetall(key)
+            tokens = float(raw.get("t", RATE_LIMIT_BURST))
+            last = float(raw.get("l", now))
+            elapsed = max(0.0, now - last)
+            tokens = min(float(RATE_LIMIT_BURST), tokens + elapsed * RATE_LIMIT_RPS)
+            if tokens < 1.0:
+                return False
+            tokens -= 1.0
+            pipe.multi()
+            pipe.hset(key, mapping={"t": str(tokens), "l": str(now)})
+            pipe.expire(key, ttl)
+            pipe.execute()
+            return True
+        except Exception:
+            return True  # fail open on Redis errors
+        finally:
+            pipe.reset()
+
+    allowed = await asyncio.to_thread(_check)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +296,11 @@ class CtagsQueryRequest(BaseModel):
 class RunJobRequest(BaseModel):
     repo: str
     job: str = Field(..., description="One of: test, build, lint")
-    preset: str = Field(..., description="Preset name: node, python, rust, go")
+    preset: str = Field(
+        "",
+        description="Preset: node, pnpm, yarn, python, rust, go, java, dotnet, bazel, cmake. "
+        "If empty, looks up default in repos.yaml.",
+    )
     args: Optional[List[str]] = None
 
 
@@ -316,6 +407,33 @@ def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
+def _load_repos_yaml() -> Dict[str, Any]:
+    """Load repos.yaml if it exists. Returns {repo_id: config_dict}."""
+    path = Path(REPOS_YAML_PATH)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r") as f:
+            data = yaml.safe_load(f)
+        return (data or {}).get("repos", {}) or {}
+    except Exception:
+        return {}
+
+
+def _repo_preset_from_yaml(repo_id: str) -> Optional[str]:
+    """Look up default preset for a repo from repos.yaml."""
+    repos = _load_repos_yaml()
+    entry = repos.get(repo_id, {})
+    return entry.get("preset") if entry else None
+
+
+def _repo_excludes_from_yaml(repo_id: str) -> List[str]:
+    """Look up repo-specific rg excludes from repos.yaml."""
+    repos = _load_repos_yaml()
+    entry = repos.get(repo_id, {})
+    return entry.get("excludes", []) if entry else []
+
+
 def _path_relative_to_repo(path_text: str, repo_path: Path) -> str:
     try:
         p = Path(path_text)
@@ -362,6 +480,7 @@ async def _run_subprocess(cmd: List[str], timeout: float) -> str:
 async def _docker_exec(
     container_name: str, cmd: List[str], timeout: int
 ) -> Tuple[int, str, str]:
+    _metrics["docker_exec_total"] += 1
     audit({
         "type": "docker_exec",
         "container": container_name,
@@ -401,10 +520,13 @@ async def _docker_exec(
             asyncio.to_thread(_run), timeout=timeout
         )
     except asyncio.TimeoutError:
+        _metrics["docker_exec_errors"] += 1
         raise HTTPException(
             status_code=408, detail=f"Docker exec timed out ({timeout}s)"
         )
 
+    if rc != 0:
+        _metrics["docker_exec_errors"] += 1
     audit({
         "type": "docker_exec_result",
         "container": container_name,
@@ -430,11 +552,17 @@ async def security_middleware(request: Request, call_next):
         else ""
     )
 
+    _metrics["requests_total"] += 1
+
     # Auth + rate limit
     try:
         _require_api_key(x_api_key)
         await _rate_limit_check(x_api_key, client_ip)
     except HTTPException as e:
+        if e.status_code == 429:
+            _metrics["rate_limit_429"] += 1
+        sc = str(e.status_code)
+        _metrics["requests_by_status"][sc] = _metrics["requests_by_status"].get(sc, 0) + 1
         audit({
             "type": "http",
             "ip": client_ip,
@@ -451,6 +579,8 @@ async def security_middleware(request: Request, call_next):
     # Forward
     response = await call_next(request)
     duration = round(time.time() - start, 4)
+    sc = str(response.status_code)
+    _metrics["requests_by_status"][sc] = _metrics["requests_by_status"].get(sc, 0) + 1
     audit({
         "type": "http",
         "ip": client_ip,
@@ -493,6 +623,8 @@ async def rg_search(req: RgSearchRequest):
 
     max_matches = max(1, min(req.max_matches, 2000))
     excludes = list(DEFAULT_EXCLUDES)
+    # Add repo-specific excludes from repos.yaml
+    excludes.extend(_repo_excludes_from_yaml(repo_id))
     if req.extra_excludes:
         excludes.extend(req.extra_excludes)
 
@@ -522,6 +654,7 @@ async def rg_search(req: RgSearchRequest):
     cmd.append(req.query)
     cmd.append(str(repo_path))
 
+    _metrics["search_total"] += 1
     async with rg_sem:
         try:
             out = await _run_subprocess(cmd, timeout=REQUEST_TIMEOUT_SEC)
@@ -582,6 +715,7 @@ async def file_slice(req: FileSliceRequest):
             status_code=400, detail="Slice too large; max 800 lines per request"
         )
 
+    _metrics["slice_total"] += 1
     lines: List[str] = []
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         for i, line in enumerate(f, start=1):
@@ -612,6 +746,7 @@ async def ctags_index(req: CtagsIndexRequest):
     repo_path = _resolve_repo_path(repo_id)
     _cache_dir_for(repo_norm)  # ensure exists
 
+    _metrics["ctags_index_total"] += 1
     container_name = "claude-ctags"
     _ensure_container_allowed(container_name)
 
@@ -662,6 +797,7 @@ async def ctags_query(req: CtagsQueryRequest):
             detail="Tags not built yet; call /v1/index/ctags first",
         )
 
+    _metrics["ctags_query_total"] += 1
     sym = req.symbol.strip()
     if not sym or len(sym) > 200:
         raise HTTPException(status_code=400, detail="Invalid symbol")
@@ -708,11 +844,18 @@ async def run_job(req: RunJobRequest):
     job = req.job.strip().lower()
     preset = req.preset.strip().lower()
 
-    # Allowlisted presets — no arbitrary commands
+    # Allowlisted presets — no arbitrary commands.
+    # If no preset given, try repos.yaml default.
+    if not preset:
+        yaml_preset = _repo_preset_from_yaml(repo_id)
+        if yaml_preset:
+            preset = yaml_preset.strip().lower()
+
+    cwd = f"/repos/{repo_id}"
     presets: Dict[str, Dict[str, Any]] = {
         "node": {
             "container": "claude-build",
-            "cwd": f"/repos/{repo_id}",
+            "cwd": cwd,
             "commands": {
                 "test": ["sh", "-c", "cd $CWD && npm test"],
                 "build": ["sh", "-c", "cd $CWD && npm run build"],
@@ -720,9 +863,29 @@ async def run_job(req: RunJobRequest):
             },
             "timeout": 900,
         },
+        "pnpm": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && pnpm test"],
+                "build": ["sh", "-c", "cd $CWD && pnpm run build"],
+                "lint": ["sh", "-c", "cd $CWD && pnpm run lint"],
+            },
+            "timeout": 900,
+        },
+        "yarn": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && yarn test"],
+                "build": ["sh", "-c", "cd $CWD && yarn build"],
+                "lint": ["sh", "-c", "cd $CWD && yarn lint"],
+            },
+            "timeout": 900,
+        },
         "python": {
             "container": "claude-build",
-            "cwd": f"/repos/{repo_id}",
+            "cwd": cwd,
             "commands": {
                 "test": ["sh", "-c", "cd $CWD && pytest -q"],
                 "build": ["sh", "-c", "cd $CWD && python -m build"],
@@ -732,7 +895,7 @@ async def run_job(req: RunJobRequest):
         },
         "rust": {
             "container": "claude-build",
-            "cwd": f"/repos/{repo_id}",
+            "cwd": cwd,
             "commands": {
                 "test": ["sh", "-c", "cd $CWD && cargo test -q"],
                 "build": ["sh", "-c", "cd $CWD && cargo build -q"],
@@ -742,7 +905,7 @@ async def run_job(req: RunJobRequest):
         },
         "go": {
             "container": "claude-build",
-            "cwd": f"/repos/{repo_id}",
+            "cwd": cwd,
             "commands": {
                 "test": ["sh", "-c", "cd $CWD && go test ./..."],
                 "build": ["sh", "-c", "cd $CWD && go build ./..."],
@@ -750,12 +913,58 @@ async def run_job(req: RunJobRequest):
             },
             "timeout": 1200,
         },
+        "java": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && ./gradlew test --no-daemon -q 2>/dev/null || mvn test -q"],
+                "build": ["sh", "-c", "cd $CWD && ./gradlew build --no-daemon -q 2>/dev/null || mvn package -q"],
+                "lint": ["sh", "-c", "cd $CWD && ./gradlew spotlessCheck --no-daemon -q 2>/dev/null || mvn checkstyle:check -q"],
+            },
+            "timeout": 1200,
+        },
+        "dotnet": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && dotnet test -q"],
+                "build": ["sh", "-c", "cd $CWD && dotnet build -q"],
+                "lint": ["sh", "-c", "cd $CWD && dotnet format --verify-no-changes"],
+            },
+            "timeout": 1200,
+        },
+        "bazel": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && bazel test //..."],
+                "build": ["sh", "-c", "cd $CWD && bazel build //..."],
+                "lint": ["sh", "-c", "cd $CWD && buildifier -lint warn -r ."],
+            },
+            "timeout": 1800,
+        },
+        "cmake": {
+            "container": "claude-build",
+            "cwd": cwd,
+            "commands": {
+                "test": ["sh", "-c", "cd $CWD && cmake --build build && ctest --test-dir build -q"],
+                "build": ["sh", "-c", "cd $CWD && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build"],
+                "lint": ["sh", "-c", "cd $CWD && cmake-lint CMakeLists.txt"],
+            },
+            "timeout": 1200,
+        },
     }
 
+    if not preset:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No preset specified and no default in repos.yaml for {repo_id}. "
+            f"Available: {', '.join(sorted(presets))}",
+        )
     if preset not in presets:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown preset: {preset}. Available: {', '.join(presets)}",
+            detail=f"Unknown preset: {preset}. Available: {', '.join(sorted(presets))}",
         )
     if job not in ("test", "build", "lint"):
         raise HTTPException(
@@ -777,7 +986,7 @@ async def run_job(req: RunJobRequest):
     stdout_b, out_trunc = _truncate_bytes(out.encode("utf-8", errors="ignore"))
     stderr_b, err_trunc = _truncate_bytes(err.encode("utf-8", errors="ignore"))
 
-    return {
+    result = {
         "repo": repo_id,
         "job": job,
         "preset": preset,
@@ -788,3 +997,60 @@ async def run_job(req: RunJobRequest):
         "stderr": stderr_b.decode("utf-8", errors="ignore"),
         "truncated": out_trunc or err_trunc,
     }
+    if result["truncated"]:
+        _metrics["truncations"] += 1
+    _metrics["job_total"] += 1
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Metrics endpoint (Prometheus text format)
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/metrics", response_class=PlainTextResponse)
+def metrics():
+    lines = []
+    lines.append("# HELP gateway_requests_total Total HTTP requests")
+    lines.append("# TYPE gateway_requests_total counter")
+    lines.append(f"gateway_requests_total {_metrics['requests_total']}")
+
+    lines.append("# HELP gateway_rate_limit_429_total Rate limit rejections")
+    lines.append("# TYPE gateway_rate_limit_429_total counter")
+    lines.append(f"gateway_rate_limit_429_total {_metrics['rate_limit_429']}")
+
+    lines.append("# HELP gateway_docker_exec_total Docker exec calls")
+    lines.append("# TYPE gateway_docker_exec_total counter")
+    lines.append(f"gateway_docker_exec_total {_metrics['docker_exec_total']}")
+
+    lines.append("# HELP gateway_docker_exec_errors_total Docker exec errors")
+    lines.append("# TYPE gateway_docker_exec_errors_total counter")
+    lines.append(f"gateway_docker_exec_errors_total {_metrics['docker_exec_errors']}")
+
+    lines.append("# HELP gateway_truncations_total Responses truncated at 512KB")
+    lines.append("# TYPE gateway_truncations_total counter")
+    lines.append(f"gateway_truncations_total {_metrics['truncations']}")
+
+    lines.append("# HELP gateway_search_total Search requests")
+    lines.append("# TYPE gateway_search_total counter")
+    lines.append(f"gateway_search_total {_metrics['search_total']}")
+
+    lines.append("# HELP gateway_slice_total File slice requests")
+    lines.append("# TYPE gateway_slice_total counter")
+    lines.append(f"gateway_slice_total {_metrics['slice_total']}")
+
+    lines.append("# HELP gateway_ctags_index_total Ctags index requests")
+    lines.append("# TYPE gateway_ctags_index_total counter")
+    lines.append(f"gateway_ctags_index_total {_metrics['ctags_index_total']}")
+
+    lines.append("# HELP gateway_ctags_query_total Ctags query requests")
+    lines.append("# TYPE gateway_ctags_query_total counter")
+    lines.append(f"gateway_ctags_query_total {_metrics['ctags_query_total']}")
+
+    lines.append("# HELP gateway_job_total Job run requests")
+    lines.append("# TYPE gateway_job_total counter")
+    lines.append(f"gateway_job_total {_metrics['job_total']}")
+
+    for status_code, count in sorted(_metrics["requests_by_status"].items()):
+        lines.append(f'gateway_requests_by_status{{status="{status_code}"}} {count}')
+
+    return "\n".join(lines) + "\n"
