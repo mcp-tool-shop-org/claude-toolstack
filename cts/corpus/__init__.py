@@ -11,6 +11,11 @@ from cts.corpus.model import CorpusRecord, PassRecord
 from cts.corpus.report import generate_report
 from cts.corpus.scan import scan_dir
 from cts.corpus.store import write_corpus, write_passes
+from cts.corpus.tuning_schema import (
+    TuningEnvelope,
+    TuningRecommendation,
+    generate_tuning,
+)
 
 __all__ = [
     "scan_dir",
@@ -20,6 +25,9 @@ __all__ = [
     "write_corpus",
     "write_passes",
     "generate_report",
+    "generate_tuning",
     "CorpusRecord",
     "PassRecord",
+    "TuningEnvelope",
+    "TuningRecommendation",
 ]

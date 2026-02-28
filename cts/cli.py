@@ -690,6 +690,41 @@ def _corpus_report(args: argparse.Namespace) -> None:
     else:
         print(report)
 
+    # Emit tuning recommendations (optional)
+    emit_tuning = getattr(args, "emit_tuning", None)
+    if emit_tuning:
+        from cts.corpus.report import _aggregate
+        from cts.corpus.tuning_schema import generate_tuning
+
+        agg = _aggregate(
+            records,
+            mode_filter=mode_filter,
+            repo_filter=repo_filter,
+            action_filter=action_filter,
+        )
+        filters_used = {}
+        if mode_filter:
+            filters_used["mode"] = mode_filter
+        if repo_filter:
+            filters_used["repo"] = repo_filter
+        if action_filter:
+            filters_used["action"] = action_filter
+
+        envelope = generate_tuning(
+            agg,
+            source_corpus=corpus_file,
+            filters=filters_used,
+        )
+        payload = json.dumps(envelope.to_dict(), indent=2, default=str)
+        with open(emit_tuning, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.write("\n")
+        n = len(envelope.recommendations)
+        print(
+            f"Tuning: {emit_tuning} ({n} recommendation(s))",
+            file=sys.stderr,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -865,6 +900,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--action",
         default=None,
         help="Filter to artifacts containing this action",
+    )
+    p_cr.add_argument(
+        "--emit-tuning",
+        default=None,
+        metavar="PATH",
+        help="Emit machine-readable tuning recommendations JSON",
     )
 
     return parser
