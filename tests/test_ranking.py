@@ -237,6 +237,8 @@ class TestRankMatchesExplain(unittest.TestCase):
             "recency_boost",
             "ctags_def_boost",
             "ctags_kind_boost",
+            "def_likeness_boost",
+            "export_boost",
         ]:
             self.assertIn(key, signals)
         # Feature keys
@@ -246,6 +248,11 @@ class TestRankMatchesExplain(unittest.TestCase):
             "is_trace_file",
             "is_def_file",
             "ctags_best_kind",
+            "is_prob_def",
+            "is_prob_export",
+            "struct_rule",
+            "struct_def_conf",
+            "struct_export_conf",
             "git_age_hours",
             "prefer_match",
             "avoid_match",
@@ -383,6 +390,97 @@ class TestCtagsRankingSignals(unittest.TestCase):
         card = cards[0]
         expected = sum(card["signals"].values())
         self.assertAlmostEqual(card["score_total"], expected, places=2)
+
+
+class TestStructuralRankingSignals(unittest.TestCase):
+    """Structural heuristic signals: def-like snippets outrank mere mentions."""
+
+    def test_def_snippet_outranks_comment(self):
+        """A snippet containing a function def should rank above a comment."""
+        matches = [
+            {"path": "src/utils.py", "line": 5, "snippet": "# login is deprecated"},
+            {"path": "src/auth.py", "line": 10, "snippet": "def login(user):"},
+        ]
+        ranked = rank_matches(matches, query_symbol="login")
+        self.assertEqual(ranked[0]["path"], "src/auth.py")
+
+    def test_def_snippet_outranks_usage(self):
+        """A definition snippet outranks a mere usage (call site)."""
+        matches = [
+            {
+                "path": "src/handler.py",
+                "line": 3,
+                "snippet": "    result = login(user)",
+            },
+            {
+                "path": "src/auth.py",
+                "line": 10,
+                "snippet": "def login(user):",
+            },
+        ]
+        ranked = rank_matches(matches, query_symbol="login")
+        self.assertEqual(ranked[0]["path"], "src/auth.py")
+
+    def test_export_snippet_gets_boost(self):
+        """An exported symbol should get an additional export boost."""
+        matches = [
+            {"path": "src/model.ts", "line": 1, "snippet": "class User {"},
+            {"path": "src/index.ts", "line": 5, "snippet": "export class User {"},
+        ]
+        ranked = rank_matches(matches, query_symbol="User")
+        self.assertEqual(ranked[0]["path"], "src/index.ts")
+
+    def test_no_query_symbol_skips_structural(self):
+        """Without query_symbol, structural heuristics should not fire."""
+        matches = [
+            {"path": "src/auth.py", "line": 10, "snippet": "def login(user):"},
+        ]
+        _, cards = rank_matches(matches, explain=True)
+        card = cards[0]
+        self.assertEqual(card["signals"]["def_likeness_boost"], 0.0)
+        self.assertEqual(card["signals"]["export_boost"], 0.0)
+
+    def test_explain_shows_structural_signals(self):
+        """Score cards should reflect structural heuristic results."""
+        matches = [
+            {"path": "src/auth.py", "line": 10, "snippet": "def login(user):"},
+        ]
+        _, cards = rank_matches(matches, query_symbol="login", explain=True)
+        card = cards[0]
+        self.assertGreater(card["signals"]["def_likeness_boost"], 0.0)
+        self.assertTrue(card["features"]["is_prob_def"])
+        self.assertEqual(card["features"]["struct_rule"], "py_def")
+        self.assertGreater(card["features"]["struct_def_conf"], 0.9)
+
+    def test_export_explain_signals(self):
+        """Export detection should appear in score card features."""
+        matches = [
+            {
+                "path": "src/api.ts",
+                "line": 1,
+                "snippet": "export const handler = () => {",
+            },
+        ]
+        _, cards = rank_matches(matches, query_symbol="handler", explain=True)
+        card = cards[0]
+        self.assertGreater(card["signals"]["export_boost"], 0.0)
+        self.assertTrue(card["features"]["is_prob_export"])
+
+    def test_signal_sum_includes_structural(self):
+        """Total score should include structural boost contributions."""
+        matches = [
+            {"path": "src/auth.py", "line": 10, "snippet": "def login(user):"},
+        ]
+        _, cards = rank_matches(matches, query_symbol="login", explain=True)
+        card = cards[0]
+        expected = sum(card["signals"].values())
+        self.assertAlmostEqual(card["score_total"], expected, places=2)
+
+    def test_no_snippet_no_crash(self):
+        """Matches without a snippet key should not crash structural eval."""
+        matches = [{"path": "src/auth.py", "line": 10}]
+        ranked = rank_matches(matches, query_symbol="login")
+        self.assertEqual(len(ranked), 1)
 
 
 if __name__ == "__main__":

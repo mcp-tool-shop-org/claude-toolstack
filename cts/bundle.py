@@ -185,6 +185,18 @@ def fetch_slices(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _looks_like_symbol(query: str) -> bool:
+    """Heuristic: is this query a single identifier (plausible symbol name)?"""
+    import re
+
+    return bool(query and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", query))
+
+
+# ---------------------------------------------------------------------------
 # Ctags enrichment helper
 # ---------------------------------------------------------------------------
 
@@ -242,6 +254,9 @@ def build_default_bundle(
     bundle = _empty_bundle("default", repo, rid, query)
     bundle["truncated"] = search_data.get("truncated", False)
 
+    # Structural heuristic: pass query as symbol if it looks like one
+    q_sym = query if _looks_like_symbol(query) else None
+
     # Rank matches
     score_cards = None
     if debug:
@@ -252,6 +267,7 @@ def build_default_bundle(
             repo_root=repo_root,
             explain=True,
             ctags_info=ctags_info,
+            query_symbol=q_sym,
         )
     else:
         ranked = rank_matches(
@@ -260,6 +276,7 @@ def build_default_bundle(
             avoid_paths=avoid_paths,
             repo_root=repo_root,
             ctags_info=ctags_info,
+            query_symbol=q_sym,
         )
     timer.lap("ranking")
 
@@ -333,6 +350,9 @@ def build_error_bundle(
         )
     timer.lap("trace_extract")
 
+    # Structural heuristic: pass query as symbol if it looks like one
+    q_sym = query if _looks_like_symbol(query) else None
+
     # Rank with trace boost
     score_cards = None
     if debug:
@@ -344,6 +364,7 @@ def build_error_bundle(
             repo_root=repo_root,
             explain=True,
             ctags_info=ctags_info,
+            query_symbol=q_sym,
         )
     else:
         ranked = rank_matches(
@@ -353,6 +374,7 @@ def build_error_bundle(
             avoid_paths=avoid_paths,
             repo_root=repo_root,
             ctags_info=ctags_info,
+            query_symbol=q_sym,
         )
     timer.lap("ranking")
 
@@ -436,16 +458,18 @@ def build_symbol_bundle(
     # Build ctags_info from symbol defs for ranking call sites
     ci = _build_ctags_info(defs) if defs else None
 
-    # Call sites from search (if available) — ranked with ctags enrichment
+    # Call sites from search (if available) — ranked with ctags + heuristics
     score_cards = None
     if search_data:
         call_matches = search_data.get("matches", [])
         if debug:
             ranked_calls, score_cards = rank_matches(
-                call_matches, ctags_info=ci, explain=True
+                call_matches, ctags_info=ci, explain=True, query_symbol=symbol
             )
         else:
-            ranked_calls = rank_matches(call_matches, ctags_info=ci)
+            ranked_calls = rank_matches(
+                call_matches, ctags_info=ci, query_symbol=symbol
+            )
         timer.lap("call_site_ranking")
 
         for m in ranked_calls:

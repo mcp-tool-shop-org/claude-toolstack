@@ -258,6 +258,7 @@ def rank_matches(
     repo_root: Optional[str] = None,
     explain: bool = False,
     ctags_info: Optional[Dict[str, Any]] = None,
+    query_symbol: Optional[str] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
     """Re-rank matches using path score + trace boost + recency + structural.
 
@@ -269,6 +270,9 @@ def rank_matches(
       - def_files: set of file paths that define the query symbol
       - kind_weight: float weight for the best ctags kind (0..0.6)
       - best_kind: str name of the best kind found
+
+    *query_symbol* enables structural heuristics (def/export detection)
+    on match snippets. Only effective when a symbol name is provided.
     """
     trace_set = set()
     if trace_files:
@@ -320,8 +324,36 @@ def rank_matches(
             ctags_def_boost = 0.8
             ctags_kind_boost = ctags_kind_w
 
+        # Structural heuristics (snippet-based def/export detection)
+        def_likeness_boost = 0.0
+        export_boost = 0.0
+        struct_rule = ""
+        struct_def_conf = 0.0
+        struct_export_conf = 0.0
+        is_prob_def = False
+        is_prob_export = False
+        if query_symbol:
+            snippet = m.get("snippet", "")
+            if snippet:
+                from cts.structural import classify_snippet
+
+                sc = classify_snippet(path, query_symbol, snippet)
+                struct_def_conf = sc["def_conf"]
+                struct_export_conf = sc["export_conf"]
+                is_prob_def = sc["is_probable_definition"]
+                is_prob_export = sc["is_probable_export"]
+                struct_rule = sc["matched_rule"]
+                def_likeness_boost = round(0.5 * struct_def_conf, 2)
+                export_boost = round(0.3 * struct_export_conf, 2)
+
         total = (
-            path_total + trace_boost + rec_boost + ctags_def_boost + ctags_kind_boost
+            path_total
+            + trace_boost
+            + rec_boost
+            + ctags_def_boost
+            + ctags_kind_boost
+            + def_likeness_boost
+            + export_boost
         )
         scored.append((total, m))
 
@@ -339,12 +371,19 @@ def rank_matches(
                         "recency_boost": rec_boost,
                         "ctags_def_boost": ctags_def_boost,
                         "ctags_kind_boost": ctags_kind_boost,
+                        "def_likeness_boost": def_likeness_boost,
+                        "export_boost": export_boost,
                     },
                     "features": {
                         "classification": path_detail["classification"],
                         "is_trace_file": is_trace,
                         "is_def_file": is_def_file,
                         "ctags_best_kind": ctags_best_kind,
+                        "is_prob_def": is_prob_def,
+                        "is_prob_export": is_prob_export,
+                        "struct_rule": struct_rule,
+                        "struct_def_conf": struct_def_conf,
+                        "struct_export_conf": struct_export_conf,
                         "git_age_hours": (
                             round(git_hours, 1) if git_hours is not None else None
                         ),
