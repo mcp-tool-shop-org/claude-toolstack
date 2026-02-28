@@ -2,10 +2,15 @@
 
 When the initial bundle confidence is below threshold, autopilot
 plans and executes refinement actions:
+
+Generic actions (all modes):
   - widen_search: increase max_matches
   - add_slices: fetch more context slices
   - try_symbol: look up the query as a symbol via ctags
   - broaden_glob: remove restrictive path globs
+
+Mode-specific actions:
+  - force_trace_slices: (error) ensure slices cover trace locations
 
 Each pass produces a new bundle stored in sidecar.passes[].
 Stops when confidence is sufficient or budget is exhausted.
@@ -63,6 +68,16 @@ def _action_broaden_glob() -> Dict[str, Any]:
     }
 
 
+def _action_force_trace_slices(
+    uncovered: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "name": "force_trace_slices",
+        "description": "Fetch slices at stack trace locations missing from bundle",
+        "trace_targets": uncovered,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
@@ -91,6 +106,16 @@ def plan_refinements(
     params = current_params or {}
     signals = conf.get("signals", {})
     actions: List[Dict[str, Any]] = []
+    mode = bundle.get("mode", "default")
+
+    # --- Mode-specific actions (highest priority) ---
+
+    if mode == "error":
+        uncovered = _find_uncovered_trace_targets(bundle)
+        if uncovered:
+            actions.append(_action_force_trace_slices(uncovered))
+
+    # --- Generic actions ---
 
     # Priority 1: If very few matches, widen search
     sources = bundle.get("ranked_sources", [])
@@ -105,7 +130,6 @@ def plan_refinements(
 
     # Priority 3: If no definition found, try symbol lookup
     def_found = signals.get("definition_found", 0.0)
-    mode = bundle.get("mode", "default")
     query = bundle.get("query", "")
     if def_found == 0.0 and mode == "default" and query:
         # Only if query looks like a symbol name
@@ -121,6 +145,31 @@ def plan_refinements(
 
     # Limit to 2 actions per pass to keep it bounded
     return actions[:2]
+
+
+def _find_uncovered_trace_targets(
+    bundle: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Find trace locations in error bundles that lack slice coverage.
+
+    Looks at ranked_sources with in_trace=True and checks whether
+    each trace file already has a matching slice. Returns the
+    uncovered targets as [{path, line}, ...].
+    """
+    trace_sources = [
+        s for s in bundle.get("ranked_sources", []) if s.get("in_trace")
+    ]
+    if not trace_sources:
+        return []
+
+    slice_paths = {s.get("path", "") for s in bundle.get("slices", [])}
+    uncovered = []
+    for src in trace_sources:
+        path = src.get("path", "")
+        if path and path not in slice_paths:
+            uncovered.append({"path": path, "line": src.get("line", 1)})
+
+    return uncovered
 
 
 def apply_refinement(
@@ -145,6 +194,19 @@ def apply_refinement(
 
     elif name == "broaden_glob":
         new_params.pop("path_globs", None)
+
+    elif name == "force_trace_slices":
+        # Increase evidence_files by the number of uncovered trace targets,
+        # capped at the max extra slices budget. This ensures the rebuild
+        # fetches enough slices to cover trace locations.
+        targets = action.get("trace_targets", [])
+        current = new_params.get("evidence_files", 5)
+        extra = min(len(targets), DEFAULT_MAX_EXTRA_SLICES)
+        new_params["evidence_files"] = min(current + extra, 15)
+        # Store targets so the builder can prioritize them
+        new_params["_force_slice_paths"] = [
+            t["path"] for t in targets
+        ]
 
     # try_symbol doesn't change search params — it triggers a
     # separate ctags lookup in execute_refinements
@@ -212,10 +274,20 @@ def execute_refinements(
         for action in actions:
             current_params = apply_refinement(current_params, action)
 
-        # Record the pass
+        # Record the pass — include action metadata for mode-specific actions
+        action_records = []
+        for a in actions:
+            record: Dict[str, Any] = {"name": a["name"]}
+            if a["name"] == "force_trace_slices":
+                targets = a.get("trace_targets", [])
+                record["trace_targets"] = [t["path"] for t in targets]
+                record["trace_targets_count"] = len(targets)
+            action_records.append(record)
+
         pass_record: Dict[str, Any] = {
             "pass": pass_num,
             "actions": [a["name"] for a in actions],
+            "action_details": action_records,
             "confidence_before": conf["score"],
             "reason": conf["reason"],
             "elapsed_ms": round(elapsed * 1000, 1),

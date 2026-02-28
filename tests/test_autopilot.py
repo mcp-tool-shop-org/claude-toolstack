@@ -6,6 +6,7 @@ import unittest
 
 from cts.autopilot import (
     DEFAULT_MAX_EXTRA_SLICES,
+    _find_uncovered_trace_targets,
     apply_refinement,
     execute_refinements,
     plan_refinements,
@@ -348,6 +349,279 @@ class TestAutopilotCliArgs(unittest.TestCase):
             ]
         )
         self.assertEqual(args.autopilot_max_extra_slices, 10)
+
+
+# ---------------------------------------------------------------------------
+# Error-mode helpers
+# ---------------------------------------------------------------------------
+
+
+def _error_bundle_with_trace(*, slices_cover_trace: bool = False) -> dict:
+    """Error bundle with trace markers on ranked_sources.
+
+    If slices_cover_trace is False, trace files are NOT in slices
+    (so force_trace_slices should trigger). Scores are kept low
+    to ensure confidence stays below threshold (0.6) when uncovered.
+    """
+    slices = []
+    if slices_cover_trace:
+        slices = [
+            {"path": "app/handler.py", "start": 1, "lines": ["..."] * 20},
+            {"path": "lib/db.py", "start": 1, "lines": ["..."] * 20},
+        ]
+    else:
+        slices = []  # No slices at all → low slice_coverage
+
+    return {
+        "version": 2,
+        "mode": "error",
+        "repo": "org/repo",
+        "request_id": "e1",
+        "query": "ConnectionError",
+        "ranked_sources": [
+            {"path": "app/handler.py", "line": 42, "score": 0.3, "in_trace": True},
+            {"path": "lib/db.py", "line": 15, "score": 0.2, "in_trace": True},
+        ],
+        "matches": [
+            {"path": "app/handler.py", "line": 42, "snippet": "raise ConnectionError"},
+            {"path": "lib/db.py", "line": 15, "snippet": "conn = db.connect()"},
+        ],
+        "slices": slices,
+        "symbols": [],
+        "diff": "",
+        "suggested_commands": [],
+        "notes": ["Stack trace detected: 2 file(s) extracted"],
+        "truncated": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests: _find_uncovered_trace_targets
+# ---------------------------------------------------------------------------
+
+
+class TestFindUncoveredTraceTargets(unittest.TestCase):
+    def test_returns_uncovered_trace_files(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        uncovered = _find_uncovered_trace_targets(b)
+        paths = [t["path"] for t in uncovered]
+        self.assertIn("app/handler.py", paths)
+        self.assertIn("lib/db.py", paths)
+
+    def test_returns_empty_when_trace_covered(self):
+        b = _error_bundle_with_trace(slices_cover_trace=True)
+        uncovered = _find_uncovered_trace_targets(b)
+        self.assertEqual(uncovered, [])
+
+    def test_returns_empty_for_no_trace_markers(self):
+        b = _low_conf_bundle()  # default mode, no in_trace
+        uncovered = _find_uncovered_trace_targets(b)
+        self.assertEqual(uncovered, [])
+
+    def test_partial_coverage_returns_only_uncovered(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        # Cover one trace file manually
+        b["slices"] = [
+            {"path": "app/handler.py", "start": 1, "lines": ["..."] * 10},
+        ]
+        uncovered = _find_uncovered_trace_targets(b)
+        paths = [t["path"] for t in uncovered]
+        self.assertNotIn("app/handler.py", paths)
+        self.assertIn("lib/db.py", paths)
+
+    def test_includes_line_numbers(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        uncovered = _find_uncovered_trace_targets(b)
+        handler = [t for t in uncovered if t["path"] == "app/handler.py"]
+        self.assertEqual(len(handler), 1)
+        self.assertEqual(handler[0]["line"], 42)
+
+
+# ---------------------------------------------------------------------------
+# Tests: force_trace_slices planner integration
+# ---------------------------------------------------------------------------
+
+
+class TestForceTraceSlicesPlanner(unittest.TestCase):
+    def test_error_mode_triggers_force_trace_slices(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertIn("force_trace_slices", names)
+
+    def test_error_mode_no_action_when_covered(self):
+        b = _error_bundle_with_trace(slices_cover_trace=True)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertNotIn("force_trace_slices", names)
+
+    def test_force_trace_slices_is_highest_priority(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        # force_trace_slices should be the first action
+        self.assertEqual(actions[0]["name"], "force_trace_slices")
+
+    def test_force_trace_slices_carries_targets(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        fts = [a for a in actions if a["name"] == "force_trace_slices"][0]
+        self.assertIn("trace_targets", fts)
+        self.assertEqual(len(fts["trace_targets"]), 2)
+
+    def test_default_mode_never_triggers_force_trace_slices(self):
+        b = _low_conf_bundle()
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        names = [a["name"] for a in actions]
+        self.assertNotIn("force_trace_slices", names)
+
+
+# ---------------------------------------------------------------------------
+# Tests: force_trace_slices apply_refinement
+# ---------------------------------------------------------------------------
+
+
+class TestForceTraceSlicesApply(unittest.TestCase):
+    def test_increases_evidence_files(self):
+        action = {
+            "name": "force_trace_slices",
+            "trace_targets": [
+                {"path": "a.py", "line": 1},
+                {"path": "b.py", "line": 2},
+            ],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 7)  # 5 + 2 targets
+
+    def test_caps_evidence_files_at_15(self):
+        action = {
+            "name": "force_trace_slices",
+            "trace_targets": [
+                {"path": f"f{i}.py", "line": i} for i in range(10)
+            ],
+        }
+        params = {"evidence_files": 12}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["evidence_files"], 15)
+
+    def test_caps_extra_at_max_extra_slices(self):
+        action = {
+            "name": "force_trace_slices",
+            "trace_targets": [
+                {"path": f"f{i}.py", "line": i} for i in range(10)
+            ],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        # min(10 targets, DEFAULT_MAX_EXTRA_SLICES=5) + 5 = 10
+        self.assertEqual(new["evidence_files"], 10)
+
+    def test_stores_force_slice_paths(self):
+        action = {
+            "name": "force_trace_slices",
+            "trace_targets": [
+                {"path": "a.py", "line": 1},
+                {"path": "b.py", "line": 2},
+            ],
+        }
+        params = {"evidence_files": 5}
+        new = apply_refinement(params, action)
+        self.assertEqual(new["_force_slice_paths"], ["a.py", "b.py"])
+
+    def test_original_not_mutated(self):
+        action = {
+            "name": "force_trace_slices",
+            "trace_targets": [{"path": "a.py", "line": 1}],
+        }
+        params = {"evidence_files": 5}
+        apply_refinement(params, action)
+        self.assertEqual(params["evidence_files"], 5)
+        self.assertNotIn("_force_slice_paths", params)
+
+
+# ---------------------------------------------------------------------------
+# Tests: execute_refinements with error-mode bundle
+# ---------------------------------------------------------------------------
+
+
+class TestForceTraceSlicesExecution(unittest.TestCase):
+    def _build_fn_error(self, **kwargs) -> dict:
+        """Mock build fn that adds trace-targeted slices when forced."""
+        force_paths = kwargs.get("_force_slice_paths", [])
+        evidence_files = kwargs.get("evidence_files", 5)
+        slices = []
+        if force_paths:
+            for fp in force_paths:
+                slices.append({"path": fp, "start": 1, "lines": ["..."] * 20})
+        # Also add some generic slices
+        for i in range(min(evidence_files - len(slices), 2)):
+            slices.append(
+                {"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10}
+            )
+
+        return {
+            "version": 2,
+            "mode": "error",
+            "repo": kwargs.get("repo", "org/repo"),
+            "request_id": kwargs.get("request_id", ""),
+            "query": kwargs.get("query", "ConnectionError"),
+            "ranked_sources": [
+                {
+                    "path": "app/handler.py", "line": 42,
+                    "score": 1.2, "in_trace": True,
+                },
+                {
+                    "path": "lib/db.py", "line": 15,
+                    "score": 0.9, "in_trace": True,
+                },
+                {"path": "gen/f0.py", "line": 1, "score": 0.3},
+            ],
+            "matches": [
+                {"path": "app/handler.py", "line": 42, "snippet": "raise Err"},
+                {"path": "lib/db.py", "line": 15, "snippet": "conn"},
+                {"path": "gen/f0.py", "line": 1, "snippet": "# gen"},
+            ],
+            "slices": slices,
+            "symbols": [],
+            "diff": "",
+            "suggested_commands": [],
+            "notes": ["Stack trace detected: 2 file(s) extracted"],
+            "truncated": False,
+        }
+
+    def test_pass_records_include_action_details(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_error,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        self.assertGreater(len(result["passes"]), 0)
+        p = result["passes"][0]
+        self.assertIn("action_details", p)
+        fts = [d for d in p["action_details"] if d["name"] == "force_trace_slices"]
+        self.assertEqual(len(fts), 1)
+        self.assertIn("trace_targets", fts[0])
+        self.assertGreater(fts[0]["trace_targets_count"], 0)
+
+    def test_trace_slices_added_after_execution(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        result = execute_refinements(
+            b,
+            build_fn=self._build_fn_error,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        final = result["final_bundle"]
+        slice_paths = [s["path"] for s in final["slices"]]
+        self.assertIn("app/handler.py", slice_paths)
+        self.assertIn("lib/db.py", slice_paths)
 
 
 if __name__ == "__main__":
