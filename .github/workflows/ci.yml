@@ -60,8 +60,14 @@ jobs:
             -p 127.0.0.1:8088:8088 \
             claude-gateway:ci
 
-          # Wait for startup
-          sleep 3
+          # Wait for startup with retry
+          for i in 1 2 3 4 5; do
+            if curl -sS -o /dev/null -w "" http://127.0.0.1:8088/v1/status 2>/dev/null; then
+              break
+            fi
+            echo "Waiting for gateway... attempt $i"
+            sleep 2
+          done
 
           # Health check
           STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
@@ -94,7 +100,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate compose structure
-        run: docker compose config --quiet
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
 
       - name: Check docker socket proxy settings
         run: |

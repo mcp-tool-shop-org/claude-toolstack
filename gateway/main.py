@@ -743,7 +743,7 @@ async def file_slice(req: FileSliceRequest):
 async def ctags_index(req: CtagsIndexRequest):
     repo_id, repo_norm = _normalize_repo(req.repo)
     _enforce_repo_allowlist(repo_id)
-    repo_path = _resolve_repo_path(repo_id)
+    _resolve_repo_path(repo_id)  # validate path exists
     _cache_dir_for(repo_norm)  # ensure exists
 
     _metrics["ctags_index_total"] += 1
