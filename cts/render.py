@@ -16,6 +16,11 @@ def render_json(data: Dict[str, Any]) -> None:
     print(json.dumps(_strip_meta(data), indent=2))
 
 
+def render_json_with_debug(data: Dict[str, Any]) -> None:
+    """Render full JSON including _debug key (for --debug-json)."""
+    print(json.dumps(data, indent=2, default=str))
+
+
 def render_text_status(data: Dict[str, Any]) -> None:
     rid = data.get("_request_id", "")
     print(f"Request-ID: {rid}")
@@ -324,5 +329,60 @@ def render_bundle(bundle: Dict[str, Any]) -> None:
         for n in notes:
             lines.append(f"  {n}")
         lines.append("")
+
+    # Debug telemetry (when --debug-bundle)
+    debug = bundle.get("_debug")
+    if debug:
+        lines.append("## Debug Telemetry")
+        lines.append("")
+
+        # Timings
+        timings = debug.get("timings_ms", {})
+        if timings:
+            lines.append("### Timings (ms)")
+            for step, ms in timings.items():
+                lines.append(f"  {step}: {ms:.2f}")
+            lines.append("")
+
+        # Bundle size
+        if "bundle_bytes" in debug:
+            kb = debug["bundle_bytes"] / 1024
+            lines.append(
+                f"### Bundle Size: {kb:.1f} KB ({debug['bundle_lines']} lines)"
+            )
+            lines.append("")
+
+        # Section sizes
+        sections = debug.get("sections", {})
+        if sections:
+            lines.append("### Section Sizes")
+            for name, info in sections.items():
+                skb = info.get("bytes", 0) / 1024
+                items = info.get("items", 0)
+                lines.append(f"  {name}: {skb:.1f} KB  ({items} items)")
+            lines.append("")
+
+        # Limits
+        limits = debug.get("limits", {})
+        if limits:
+            lines.append("### Limits")
+            for k, v in limits.items():
+                lines.append(f"  {k}: {v}")
+            lines.append("")
+
+        # Score cards
+        cards = debug.get("score_cards", [])
+        if cards:
+            lines.append(f"### Score Cards (top {len(cards)})")
+            for card in cards:
+                cpath = card.get("path", "?")
+                ctotal = card.get("score_total", 0.0)
+                lines.append(f"  {ctotal:+.2f}  {cpath}")
+                signals = card.get("signals", {})
+                nonzero = {k: v for k, v in signals.items() if v != 0.0}
+                if nonzero:
+                    parts = [f"{k}={v:+.2f}" for k, v in nonzero.items()]
+                    lines.append(f"         {', '.join(parts)}")
+            lines.append("")
 
     print("\n".join(lines))

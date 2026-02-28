@@ -87,6 +87,24 @@ def _add_bundle_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Local repo root for git recency scoring (optional)",
     )
+    parser.add_argument(
+        "--debug-bundle",
+        action="store_true",
+        default=False,
+        help="Include _debug telemetry in bundle (timings, sizes, score cards)",
+    )
+    parser.add_argument(
+        "--debug-json",
+        action="store_true",
+        default=False,
+        help="Emit raw bundle JSON with _debug instead of rendered text",
+    )
+    parser.add_argument(
+        "--explain-top",
+        type=int,
+        default=10,
+        help="Number of score cards to include in debug (default 10)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +140,10 @@ def cmd_search(args: argparse.Namespace) -> None:
         prefer = _parse_csv(getattr(args, "prefer_paths", None))
         avoid = _parse_csv(getattr(args, "avoid_paths", None))
         repo_root = getattr(args, "repo_root", None)
+        debug = getattr(args, "debug_bundle", False) or getattr(
+            args, "debug_json", False
+        )
+        explain_top = getattr(args, "explain_top", 10)
 
         if mode == "error":
             error_text = getattr(args, "error_text", "") or ""
@@ -135,6 +157,8 @@ def cmd_search(args: argparse.Namespace) -> None:
                 prefer_paths=prefer,
                 avoid_paths=avoid,
                 repo_root=repo_root,
+                debug=debug,
+                explain_top=explain_top,
             )
         else:
             b = bundle_mod.build_default_bundle(
@@ -146,8 +170,14 @@ def cmd_search(args: argparse.Namespace) -> None:
                 prefer_paths=prefer,
                 avoid_paths=avoid,
                 repo_root=repo_root,
+                debug=debug,
+                explain_top=explain_top,
             )
-        render.render_bundle(b)
+
+        if getattr(args, "debug_json", False):
+            render.render_json_with_debug(b)
+        else:
+            render.render_bundle(b)
         return
 
     render.render_text_search(data)
@@ -213,6 +243,9 @@ def cmd_symbol(args: argparse.Namespace) -> None:
             except SystemExit:
                 pass  # search is optional enrichment
 
+        debug = getattr(args, "debug_bundle", False) or getattr(
+            args, "debug_json", False
+        )
         b = bundle_mod.build_symbol_bundle(
             data,
             search_data=search_data,
@@ -221,8 +254,12 @@ def cmd_symbol(args: argparse.Namespace) -> None:
             request_id=data.get("_request_id"),
             max_files=getattr(args, "evidence_files", 5),
             context=getattr(args, "context", 30),
+            debug=debug,
         )
-        render.render_bundle(b)
+        if getattr(args, "debug_json", False):
+            render.render_json_with_debug(b)
+        else:
+            render.render_bundle(b)
         return
 
     render.render_text_symbol(data)
