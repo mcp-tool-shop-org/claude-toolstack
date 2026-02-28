@@ -411,5 +411,94 @@ class TestBuildChangeBundleDebug(unittest.TestCase):
         self.assertEqual(debug["limits"]["files_changed"], 1)
 
 
+class TestSymbolBundleCtagsEnrichment(unittest.TestCase):
+    @patch("cts.bundle.fetch_slices", return_value=[])
+    def test_call_sites_ranked_by_ctags(self, _mock_slices):
+        """Call sites in def files should rank above non-def files."""
+        symbol_data = {
+            "defs": [{"name": "Foo", "kind": "c", "file": "src/model.py"}],
+            "_request_id": "rid",
+        }
+        search_data = {
+            "matches": [
+                {"path": "vendor/other.py", "line": 1, "snippet": "import Foo"},
+                {"path": "src/model.py", "line": 20, "snippet": "class Foo:"},
+            ],
+        }
+        bundle = build_symbol_bundle(
+            symbol_data,
+            search_data=search_data,
+            repo="org/repo",
+            symbol="Foo",
+        )
+        # Def file (src/model.py) should rank first in matches
+        self.assertEqual(bundle["matches"][0]["path"], "src/model.py")
+
+    @patch("cts.bundle.fetch_slices", return_value=[])
+    def test_debug_shows_ctags_info(self, _mock_slices):
+        """Debug output should include ctags metadata."""
+        symbol_data = {
+            "defs": [{"name": "Foo", "kind": "c", "file": "src/model.py"}],
+            "_request_id": "rid",
+        }
+        search_data = {
+            "matches": [
+                {"path": "src/model.py", "line": 10, "snippet": "class Foo:"},
+            ],
+        }
+        bundle = build_symbol_bundle(
+            symbol_data,
+            search_data=search_data,
+            repo="org/repo",
+            symbol="Foo",
+            debug=True,
+        )
+        debug = bundle["_debug"]
+        self.assertEqual(debug["limits"]["ctags_best_kind"], "class")
+        self.assertEqual(debug["limits"]["ctags_def_files"], 1)
+        self.assertIn("score_cards", debug)
+
+    @patch("cts.bundle.fetch_slices", return_value=[])
+    def test_no_search_data_no_score_cards(self, _mock_slices):
+        """Without search data, no call site ranking occurs."""
+        symbol_data = {
+            "defs": [{"name": "Foo", "kind": "c", "file": "src/model.py"}],
+            "_request_id": "rid",
+        }
+        bundle = build_symbol_bundle(
+            symbol_data,
+            search_data=None,
+            repo="org/repo",
+            symbol="Foo",
+            debug=True,
+        )
+        debug = bundle["_debug"]
+        self.assertNotIn("score_cards", debug)
+
+
+class TestDefaultBundleCtagsInfo(unittest.TestCase):
+    @patch("cts.bundle.fetch_slices", return_value=[])
+    def test_ctags_info_boosts_def_file(self, _mock_slices):
+        """Default bundle with ctags_info should boost def files."""
+        search_data = {
+            "query": "MyClass",
+            "matches": [
+                {"path": "docs/readme.md", "line": 5, "snippet": "MyClass usage"},
+                {"path": "src/model.py", "line": 10, "snippet": "class MyClass:"},
+            ],
+            "_request_id": "rid",
+        }
+        ctags_info = {
+            "def_files": {"src/model.py"},
+            "kind_weight": 0.6,
+            "best_kind": "class",
+        }
+        bundle = build_default_bundle(
+            search_data, repo="org/repo", ctags_info=ctags_info
+        )
+        # Def file should rank first
+        self.assertEqual(bundle["ranked_sources"][0]["path"], "src/model.py")
+
+
 if __name__ == "__main__":
     unittest.main()

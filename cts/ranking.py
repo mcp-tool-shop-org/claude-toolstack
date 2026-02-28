@@ -257,12 +257,18 @@ def rank_matches(
     avoid_paths: Optional[List[str]] = None,
     repo_root: Optional[str] = None,
     explain: bool = False,
+    ctags_info: Optional[Dict[str, Any]] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
-    """Re-rank matches using path score + trace boost + recency.
+    """Re-rank matches using path score + trace boost + recency + structural.
 
     Returns a sorted list with _rank_score attached.
     If *explain=True*, returns (ranked, score_cards) where score_cards
     is a list of per-candidate signal breakdowns.
+
+    *ctags_info* is an optional dict with:
+      - def_files: set of file paths that define the query symbol
+      - kind_weight: float weight for the best ctags kind (0..0.6)
+      - best_kind: str name of the best kind found
     """
     trace_set = set()
     if trace_files:
@@ -270,6 +276,15 @@ def rank_matches(
             trace_set.add(fpath)
             if "/" in fpath:
                 trace_set.add(fpath.rsplit("/", 1)[-1])
+
+    # Ctags structural data
+    ctags_def_files: set = set()
+    ctags_kind_w: float = 0.0
+    ctags_best_kind: str = ""
+    if ctags_info:
+        ctags_def_files = ctags_info.get("def_files", set())
+        ctags_kind_w = ctags_info.get("kind_weight", 0.0)
+        ctags_best_kind = ctags_info.get("best_kind", "")
 
     scored = []
     cards: List[Dict[str, Any]] = []
@@ -296,7 +311,18 @@ def rank_matches(
             git_hours = file_recency_hours(repo_root, path)
             rec_boost = recency_score(git_hours)
 
-        total = path_total + trace_boost + rec_boost
+        # Structural signals (ctags)
+        ctags_def_boost = 0.0
+        ctags_kind_boost = 0.0
+        is_def_file = False
+        if ctags_def_files and path in ctags_def_files:
+            is_def_file = True
+            ctags_def_boost = 0.8
+            ctags_kind_boost = ctags_kind_w
+
+        total = (
+            path_total + trace_boost + rec_boost + ctags_def_boost + ctags_kind_boost
+        )
         scored.append((total, m))
 
         if explain:
@@ -311,10 +337,14 @@ def rank_matches(
                         "test_penalty": path_detail["test_penalty"],
                         "trace_boost": trace_boost,
                         "recency_boost": rec_boost,
+                        "ctags_def_boost": ctags_def_boost,
+                        "ctags_kind_boost": ctags_kind_boost,
                     },
                     "features": {
                         "classification": path_detail["classification"],
                         "is_trace_file": is_trace,
+                        "is_def_file": is_def_file,
+                        "ctags_best_kind": ctags_best_kind,
                         "git_age_hours": (
                             round(git_hours, 1) if git_hours is not None else None
                         ),

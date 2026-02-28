@@ -20,6 +20,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from cts import http
+from cts.ctags import kind_weight, normalize_kind
 from cts.ranking import (
     extract_trace_files,
     looks_like_stack_trace,
@@ -184,6 +185,37 @@ def fetch_slices(
 
 
 # ---------------------------------------------------------------------------
+# Ctags enrichment helper
+# ---------------------------------------------------------------------------
+
+
+def _build_ctags_info(
+    defs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build ctags_info dict from symbol definitions for ranking.
+
+    Returns dict with def_files, kind_weight, and best_kind.
+    """
+    def_files = {d.get("file", "") for d in defs if d.get("file")}
+    best_w = 0.0
+    best_kind = ""
+    for d in defs:
+        raw = d.get("kind") or ""
+        if not raw:
+            continue
+        name = normalize_kind(raw)
+        w = kind_weight(name)
+        if w > best_w:
+            best_w = w
+            best_kind = name
+    return {
+        "def_files": def_files,
+        "kind_weight": best_w,
+        "best_kind": best_kind,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Default bundle
 # ---------------------------------------------------------------------------
 
@@ -199,6 +231,7 @@ def build_default_bundle(
     repo_root: Optional[str] = None,
     debug: bool = False,
     explain_top: int = 10,
+    ctags_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
     timer = _Timer()
@@ -218,6 +251,7 @@ def build_default_bundle(
             avoid_paths=avoid_paths,
             repo_root=repo_root,
             explain=True,
+            ctags_info=ctags_info,
         )
     else:
         ranked = rank_matches(
@@ -225,6 +259,7 @@ def build_default_bundle(
             prefer_paths=prefer_paths,
             avoid_paths=avoid_paths,
             repo_root=repo_root,
+            ctags_info=ctags_info,
         )
     timer.lap("ranking")
 
@@ -274,6 +309,7 @@ def build_error_bundle(
     repo_root: Optional[str] = None,
     debug: bool = False,
     explain_top: int = 10,
+    ctags_info: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build an error-aware evidence bundle.
 
@@ -307,6 +343,7 @@ def build_error_bundle(
             avoid_paths=avoid_paths,
             repo_root=repo_root,
             explain=True,
+            ctags_info=ctags_info,
         )
     else:
         ranked = rank_matches(
@@ -315,6 +352,7 @@ def build_error_bundle(
             prefer_paths=prefer_paths,
             avoid_paths=avoid_paths,
             repo_root=repo_root,
+            ctags_info=ctags_info,
         )
     timer.lap("ranking")
 
@@ -395,10 +433,22 @@ def build_symbol_bundle(
     )
     timer.lap("slice_fetch")
 
-    # Call sites from search (if available)
+    # Build ctags_info from symbol defs for ranking call sites
+    ci = _build_ctags_info(defs) if defs else None
+
+    # Call sites from search (if available) — ranked with ctags enrichment
+    score_cards = None
     if search_data:
         call_matches = search_data.get("matches", [])
-        for m in call_matches:
+        if debug:
+            ranked_calls, score_cards = rank_matches(
+                call_matches, ctags_info=ci, explain=True
+            )
+        else:
+            ranked_calls = rank_matches(call_matches, ctags_info=ci)
+        timer.lap("call_site_ranking")
+
+        for m in ranked_calls:
             snippet = m.get("snippet", "").rstrip()
             if len(snippet) > MAX_SNIPPET_LEN:
                 snippet = snippet[:MAX_SNIPPET_LEN] + "..."
@@ -413,15 +463,20 @@ def build_symbol_bundle(
     bundle["suggested_commands"] = _suggest_commands(repo, symbol, [], mode="symbol")
 
     if debug:
+        limits: Dict[str, Any] = {
+            "max_files": max_files,
+            "context": context,
+            "mode": "symbol",
+            "definitions_found": len(defs),
+        }
+        if ci:
+            limits["ctags_best_kind"] = ci.get("best_kind", "")
+            limits["ctags_def_files"] = len(ci.get("def_files", set()))
         bundle["_debug"] = _compute_debug(
             bundle,
             timer,
-            limits={
-                "max_files": max_files,
-                "context": context,
-                "mode": "symbol",
-                "definitions_found": len(defs),
-            },
+            score_cards=score_cards,
+            limits=limits,
         )
 
     return bundle

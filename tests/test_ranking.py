@@ -235,6 +235,8 @@ class TestRankMatchesExplain(unittest.TestCase):
             "test_penalty",
             "trace_boost",
             "recency_boost",
+            "ctags_def_boost",
+            "ctags_kind_boost",
         ]:
             self.assertIn(key, signals)
         # Feature keys
@@ -242,6 +244,8 @@ class TestRankMatchesExplain(unittest.TestCase):
         for key in [
             "classification",
             "is_trace_file",
+            "is_def_file",
+            "ctags_best_kind",
             "git_age_hours",
             "prefer_match",
             "avoid_match",
@@ -284,6 +288,101 @@ class TestRankMatchesExplain(unittest.TestCase):
         self.assertEqual(ranked[0]["path"], "src/y.py")
         self.assertEqual(cards[0]["path"], "src/y.py")
         self.assertGreaterEqual(cards[0]["score_total"], cards[1]["score_total"])
+
+
+class TestCtagsRankingSignals(unittest.TestCase):
+    def test_def_file_boost(self):
+        """File defining the symbol should rank above non-def files."""
+        matches = [
+            {"path": "src/utils.py", "line": 5, "snippet": "import MyClass"},
+            {"path": "src/model.py", "line": 10, "snippet": "class MyClass:"},
+        ]
+        ctags_info = {
+            "def_files": {"src/model.py"},
+            "kind_weight": 0.6,
+            "best_kind": "class",
+        }
+        ranked = rank_matches(matches, ctags_info=ctags_info)
+        self.assertEqual(ranked[0]["path"], "src/model.py")
+
+    def test_def_file_boost_overrides_vendor_penalty(self):
+        """Ctags def boost (+0.8 + kind) should overcome vendor penalty (-0.8)."""
+        matches = [
+            {"path": "src/handler.py", "line": 1, "snippet": "use Lib"},
+            {"path": "vendor/lib.py", "line": 5, "snippet": "class Lib:"},
+        ]
+        ctags_info = {
+            "def_files": {"vendor/lib.py"},
+            "kind_weight": 0.6,
+            "best_kind": "class",
+        }
+        ranked = rank_matches(matches, ctags_info=ctags_info)
+        # vendor/lib.py: -0.8 (vendor) + 0.8 (def) + 0.6 (kind) = +0.6
+        # src/handler.py: +0.5 (src) = +0.5
+        self.assertEqual(ranked[0]["path"], "vendor/lib.py")
+
+    def test_no_ctags_info_no_boost(self):
+        """Without ctags_info, no structural boost applied."""
+        matches = [{"path": "src/foo.py", "line": 1}]
+        ranked = rank_matches(matches)
+        # Score should just be path score (0.5 for src/)
+        self.assertAlmostEqual(ranked[0]["_rank_score"], 0.5)
+
+    def test_ctags_info_none_is_safe(self):
+        """Passing ctags_info=None should not break anything."""
+        matches = [{"path": "src/foo.py", "line": 1}]
+        ranked = rank_matches(matches, ctags_info=None)
+        self.assertEqual(len(ranked), 1)
+
+    def test_explain_includes_ctags_signals(self):
+        """Score cards should include ctags signal keys."""
+        matches = [
+            {"path": "src/model.py", "line": 10, "snippet": "class X:"},
+        ]
+        ctags_info = {
+            "def_files": {"src/model.py"},
+            "kind_weight": 0.5,
+            "best_kind": "function",
+        }
+        _, cards = rank_matches(matches, ctags_info=ctags_info, explain=True)
+        card = cards[0]
+        self.assertIn("ctags_def_boost", card["signals"])
+        self.assertIn("ctags_kind_boost", card["signals"])
+        self.assertEqual(card["signals"]["ctags_def_boost"], 0.8)
+        self.assertEqual(card["signals"]["ctags_kind_boost"], 0.5)
+        self.assertTrue(card["features"]["is_def_file"])
+        self.assertEqual(card["features"]["ctags_best_kind"], "function")
+
+    def test_explain_non_def_file_zero_ctags(self):
+        """Non-def files should have zero ctags signals."""
+        matches = [
+            {"path": "src/other.py", "line": 1, "snippet": "x"},
+        ]
+        ctags_info = {
+            "def_files": {"src/model.py"},
+            "kind_weight": 0.6,
+            "best_kind": "class",
+        }
+        _, cards = rank_matches(matches, ctags_info=ctags_info, explain=True)
+        card = cards[0]
+        self.assertEqual(card["signals"]["ctags_def_boost"], 0.0)
+        self.assertEqual(card["signals"]["ctags_kind_boost"], 0.0)
+        self.assertFalse(card["features"]["is_def_file"])
+
+    def test_signal_sum_includes_ctags(self):
+        """Total score should equal sum of all signals including ctags."""
+        matches = [
+            {"path": "src/model.py", "line": 10, "snippet": "x"},
+        ]
+        ctags_info = {
+            "def_files": {"src/model.py"},
+            "kind_weight": 0.6,
+            "best_kind": "class",
+        }
+        _, cards = rank_matches(matches, ctags_info=ctags_info, explain=True)
+        card = cards[0]
+        expected = sum(card["signals"].values())
+        self.assertAlmostEqual(card["score_total"], expected, places=2)
 
 
 if __name__ == "__main__":
