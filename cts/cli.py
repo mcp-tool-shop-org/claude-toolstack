@@ -4,13 +4,14 @@ Usage:
   cts status
   cts search <query> --repo org/repo [--glob ...] [--max N]
   cts search <query> --repo org/repo --format claude --bundle error
+  cts search <query> --repo org/repo --format sidecar --emit bundle.json
   cts slice --repo org/repo <path>:<start>-<end>
   cts symbol <sym> --repo org/repo --format claude --bundle symbol
   cts index ctags --repo org/repo
   cts job (test|build|lint) --repo org/repo [--preset ...]
 
-Output modes: --json | --text (default) | --claude
-Bundle modes: default | error | symbol | change  (requires --format claude)
+Output modes: --json | --text (default) | --claude | --sidecar
+Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
 """
 
 from __future__ import annotations
@@ -23,12 +24,13 @@ from cts import __version__
 from cts import bundle as bundle_mod
 from cts import http
 from cts import render
+from cts import schema as schema_mod
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
-        choices=["json", "text", "claude"],
+        choices=["json", "text", "claude", "sidecar"],
         default="text",
         help="Output format (default: text)",
     )
@@ -105,6 +107,12 @@ def _add_bundle_args(parser: argparse.ArgumentParser) -> None:
         default=10,
         help="Number of score cards to include in debug (default 10)",
     )
+    parser.add_argument(
+        "--emit",
+        default=None,
+        metavar="PATH",
+        help="Write sidecar JSON to PATH (atomic write via tmp+rename)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +143,7 @@ def cmd_search(args: argparse.Namespace) -> None:
         render.render_json(data)
         return
 
-    if args.format == "claude":
+    if args.format in ("claude", "sidecar"):
         mode = getattr(args, "bundle", "default")
         prefer = _parse_csv(getattr(args, "prefer_paths", None))
         avoid = _parse_csv(getattr(args, "avoid_paths", None))
@@ -174,6 +182,23 @@ def cmd_search(args: argparse.Namespace) -> None:
                 explain_top=explain_top,
             )
 
+        if args.format == "sidecar" or getattr(args, "emit", None):
+            _emit_sidecar(
+                b,
+                args,
+                mode=mode,
+                query=args.query,
+                inputs={
+                    "query": args.query,
+                    "max": args.max,
+                    "bundle_mode": mode,
+                    "evidence_files": args.evidence_files,
+                    "context": args.context,
+                },
+            )
+            if args.format == "sidecar":
+                return
+
         if getattr(args, "debug_json", False):
             render.render_json_with_debug(b)
         else:
@@ -188,6 +213,58 @@ def _parse_csv(val: Optional[str]) -> Optional[List[str]]:
     if not val:
         return None
     return [v.strip() for v in val.split(",") if v.strip()]
+
+
+def _emit_sidecar(
+    bundle: dict,
+    args: argparse.Namespace,
+    *,
+    mode: str,
+    query: str | None = None,
+    inputs: dict | None = None,
+) -> None:
+    """Wrap bundle in sidecar schema, emit to stdout or --emit file."""
+    import json
+    import os
+    import tempfile
+
+    sidecar = schema_mod.wrap_bundle(
+        bundle,
+        mode=mode,
+        request_id=bundle.get("request_id", ""),
+        cli_version=__version__,
+        repo=getattr(args, "repo", ""),
+        query=query,
+        inputs=inputs,
+        debug=getattr(args, "debug_bundle", False)
+        or getattr(args, "debug_json", False),
+    )
+
+    payload = json.dumps(sidecar, indent=2, default=str)
+
+    emit_path = getattr(args, "emit", None)
+    if emit_path:
+        # Atomic write: write to tmp in same dir, then rename
+        target_dir = os.path.dirname(os.path.abspath(emit_path))
+        os.makedirs(target_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=target_dir, prefix=".cts-emit-", suffix=".json"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.write("\n")
+            os.replace(tmp_path, emit_path)
+        except BaseException:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+        print(f"Sidecar written to {emit_path}", file=sys.stderr)
+    else:
+        print(payload)
 
 
 def cmd_slice(args: argparse.Namespace) -> None:
@@ -226,10 +303,11 @@ def cmd_symbol(args: argparse.Namespace) -> None:
         render.render_json(data)
         return
 
-    if args.format == "claude":
+    if args.format in ("claude", "sidecar"):
         # Symbol bundle: defs + call site search
         search_data = None
-        if getattr(args, "bundle", "default") == "symbol":
+        bundle_mode = getattr(args, "bundle", "default")
+        if bundle_mode == "symbol":
             try:
                 search_data = http.post(
                     "/v1/search/rg",
@@ -256,6 +334,21 @@ def cmd_symbol(args: argparse.Namespace) -> None:
             context=getattr(args, "context", 30),
             debug=debug,
         )
+
+        if args.format == "sidecar" or getattr(args, "emit", None):
+            _emit_sidecar(
+                b,
+                args,
+                mode=bundle_mode,
+                query=args.symbol,
+                inputs={
+                    "symbol": args.symbol,
+                    "bundle_mode": bundle_mode,
+                },
+            )
+            if args.format == "sidecar":
+                return
+
         if getattr(args, "debug_json", False):
             render.render_json_with_debug(b)
         else:
