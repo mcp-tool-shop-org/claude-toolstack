@@ -113,6 +113,25 @@ def _add_bundle_args(parser: argparse.ArgumentParser) -> None:
         metavar="PATH",
         help="Write sidecar JSON to PATH (atomic write via tmp+rename)",
     )
+    parser.add_argument(
+        "--autopilot",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Enable autopilot with up to N refinement passes (0=off)",
+    )
+    parser.add_argument(
+        "--autopilot-max-seconds",
+        type=float,
+        default=30.0,
+        help="Wall-clock budget for autopilot passes (default 30s)",
+    )
+    parser.add_argument(
+        "--autopilot-max-extra-slices",
+        type=int,
+        default=5,
+        help="Max additional slices per refinement pass (default 5)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +201,42 @@ def cmd_search(args: argparse.Namespace) -> None:
                 explain_top=explain_top,
             )
 
+        # Autopilot refinement (if requested)
+        autopilot_passes: list | None = None
+        autopilot_n = getattr(args, "autopilot", 0)
+        if autopilot_n > 0 and mode == "default":
+            from cts.autopilot import execute_refinements
+            from cts.confidence import bundle_confidence
+
+            # Get score cards for confidence check
+            initial_cards = None
+            if "_debug" in b:
+                initial_cards = b["_debug"].get("score_cards")
+
+            # Only refine if initial confidence is low
+            initial_conf = bundle_confidence(b, score_cards=initial_cards)
+            if not initial_conf["sufficient"]:
+                result = execute_refinements(
+                    b,
+                    build_fn=bundle_mod.build_default_bundle,
+                    build_kwargs={
+                        "search_data": data,
+                        "repo": args.repo,
+                        "request_id": data.get("_request_id"),
+                        "max_files": args.evidence_files,
+                        "context": args.context,
+                        "prefer_paths": prefer,
+                        "avoid_paths": avoid,
+                        "repo_root": repo_root,
+                        "explain_top": explain_top,
+                    },
+                    max_passes=autopilot_n,
+                    max_seconds=getattr(args, "autopilot_max_seconds", 30.0),
+                    score_cards=initial_cards,
+                )
+                b = result["final_bundle"]
+                autopilot_passes = result["passes"]
+
         if args.format == "sidecar" or getattr(args, "emit", None):
             _emit_sidecar(
                 b,
@@ -195,6 +250,7 @@ def cmd_search(args: argparse.Namespace) -> None:
                     "evidence_files": args.evidence_files,
                     "context": args.context,
                 },
+                passes=autopilot_passes,
             )
             if args.format == "sidecar":
                 return
@@ -222,6 +278,7 @@ def _emit_sidecar(
     mode: str,
     query: str | None = None,
     inputs: dict | None = None,
+    passes: list | None = None,
 ) -> None:
     """Wrap bundle in sidecar schema, emit to stdout or --emit file."""
     import json
@@ -238,6 +295,7 @@ def _emit_sidecar(
         inputs=inputs,
         debug=getattr(args, "debug_bundle", False)
         or getattr(args, "debug_json", False),
+        passes=passes,
     )
 
     payload = json.dumps(sidecar, indent=2, default=str)
