@@ -14,6 +14,7 @@ Usage:
   cts sidecar secrets-scan artifact.json [--fail]
   cts corpus ingest <dir> --out corpus.jsonl
   cts corpus report corpus.jsonl --format markdown --out report.md
+  cts corpus patch tuning.json --repos-yaml repos.yaml --format diff
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -562,6 +563,8 @@ def cmd_corpus(args: argparse.Namespace) -> None:
         _corpus_ingest(args)
     elif action == "report":
         _corpus_report(args)
+    elif action == "patch":
+        _corpus_patch(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -724,6 +727,60 @@ def _corpus_report(args: argparse.Namespace) -> None:
             f"Tuning: {emit_tuning} ({n} recommendation(s))",
             file=sys.stderr,
         )
+
+
+def _corpus_patch(args: argparse.Namespace) -> None:
+    from cts.corpus.patch import (
+        generate_patch_plan,
+        load_repos_yaml,
+        load_tuning,
+        render_plan_diff,
+        render_plan_json,
+        render_plan_text,
+    )
+
+    tuning_path: str = args.tuning
+    repos_yaml_path: str = args.repos_yaml
+    fmt: str = getattr(args, "patch_format", "text")
+    out_path: str | None = getattr(args, "out", None)
+
+    try:
+        tuning = load_tuning(tuning_path)
+    except FileNotFoundError:
+        print(f"Error: file not found: {tuning_path}", file=sys.stderr)
+        raise SystemExit(1)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        repos_yaml = load_repos_yaml(repos_yaml_path)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {repos_yaml_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    items = generate_patch_plan(tuning, repos_yaml)
+
+    if fmt == "json":
+        output = render_plan_json(items)
+    elif fmt == "diff":
+        output = render_plan_diff(repos_yaml, items, yaml_path=repos_yaml_path)
+    else:
+        output = render_plan_text(items)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        active = len([i for i in items if not i.skipped])
+        print(
+            f"Patch plan: {out_path} ({active} active patch(es))",
+            file=sys.stderr,
+        )
+    else:
+        print(output)
 
 
 # ---------------------------------------------------------------------------
@@ -906,6 +963,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Emit machine-readable tuning recommendations JSON",
+    )
+
+    # corpus patch
+    p_cp = corpus_sub.add_parser(
+        "patch",
+        help="Generate patch plan from tuning recommendations",
+    )
+    p_cp.add_argument(
+        "tuning",
+        help="Path to tuning recommendations JSON",
+    )
+    p_cp.add_argument(
+        "--repos-yaml",
+        default="repos.yaml",
+        help="Path to repos.yaml (default: repos.yaml)",
+    )
+    p_cp.add_argument(
+        "--format",
+        dest="patch_format",
+        choices=["text", "json", "diff"],
+        default="text",
+        help="Patch plan output format (default: text)",
+    )
+    p_cp.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write patch plan to file (default: stdout)",
     )
 
     return parser

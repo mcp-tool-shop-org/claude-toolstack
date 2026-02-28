@@ -11,6 +11,13 @@ from cts.corpus.model import CorpusRecord, PassRecord
 from cts.corpus.report import generate_report
 from cts.corpus.scan import scan_dir
 from cts.corpus.store import write_corpus, write_passes
+from cts.corpus.patch import (
+    PatchItem,
+    generate_patch_plan,
+    render_plan_diff,
+    render_plan_json,
+    render_plan_text,
+)
 from cts.corpus.tuning_schema import (
     TuningEnvelope,
     TuningRecommendation,
@@ -26,8 +33,13 @@ __all__ = [
     "write_passes",
     "generate_report",
     "generate_tuning",
+    "generate_patch_plan",
+    "render_plan_json",
+    "render_plan_diff",
+    "render_plan_text",
     "CorpusRecord",
     "PassRecord",
+    "PatchItem",
     "TuningEnvelope",
     "TuningRecommendation",
 ]
