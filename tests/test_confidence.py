@@ -134,19 +134,54 @@ class TestBundleConfidence(unittest.TestCase):
         conf = bundle_confidence(_rich_bundle())
         self.assertEqual(conf["signals"]["definition_found"], 0.0)
 
-    def test_error_mode_trace_bonus(self):
+    def test_error_mode_trace_bonus_full(self):
+        """Error mode with trace detected + all trace files covered by slices."""
         b = _rich_bundle()
         b["mode"] = "error"
-        b["notes"] = ["Stack trace detected: 3 file(s) extracted"]
+        b["notes"] = ["Stack trace detected: 2 file(s) extracted"]
+        # Mark sources as trace targets and ensure slices cover them
+        b["ranked_sources"][0]["in_trace"] = True
+        b["ranked_sources"][1]["in_trace"] = True
         conf = bundle_confidence(b)
+        # 0.05 (trace note) + 0.10 (2/2 covered) = 0.15
         self.assertEqual(conf["signals"]["mode_bonus"], 0.15)
 
-    def test_symbol_mode_bonus(self):
+    def test_error_mode_trace_bonus_partial(self):
+        """Error mode with trace but no in_trace markers → only note bonus."""
+        b = _rich_bundle()
+        b["mode"] = "error"
+        b["notes"] = ["Stack trace detected: 2 file(s) extracted"]
+        conf = bundle_confidence(b)
+        # Only 0.05 for trace note, no in_trace markers
+        self.assertEqual(conf["signals"]["mode_bonus"], 0.05)
+
+    def test_symbol_mode_bonus_full(self):
+        """Symbol mode with defs + callers all covered by slices."""
         b = _rich_bundle()
         b["mode"] = "symbol"
-        b["symbols"] = [{"name": "login", "kind": "function", "file": "a.py"}]
+        b["symbols"] = [
+            {"name": "login", "kind": "function", "file": "src/auth.py"},
+        ]
+        # matches are callers (different from def file)
+        b["matches"] = [
+            {"path": "src/session.py", "line": 5, "snippet": "login(user)"},
+        ]
+        # slices cover both def file and caller file
         conf = bundle_confidence(b)
+        # 0.05 (symbols) + 0.05 (def covered) + 0.05 (caller covered) = 0.15
         self.assertEqual(conf["signals"]["mode_bonus"], 0.15)
+
+    def test_symbol_mode_bonus_defs_only(self):
+        """Symbol mode with defs but def file not in slices."""
+        b = _rich_bundle()
+        b["mode"] = "symbol"
+        b["symbols"] = [
+            {"name": "login", "kind": "function", "file": "missing.py"},
+        ]
+        conf = bundle_confidence(b)
+        # 0.05 (symbols) + 0.0 (missing.py not in slices) = 0.05+partial
+        self.assertGreaterEqual(conf["signals"]["mode_bonus"], 0.05)
+        self.assertLess(conf["signals"]["mode_bonus"], 0.15)
 
     def test_no_mode_bonus_for_default(self):
         conf = bundle_confidence(_rich_bundle())
@@ -159,6 +194,33 @@ class TestBundleConfidence(unittest.TestCase):
     def test_match_penalty_sufficient_matches(self):
         conf = bundle_confidence(_rich_bundle())
         self.assertEqual(conf["signals"]["low_match_penalty"], 0.0)
+
+
+    def test_change_mode_bonus_full(self):
+        """Change mode with diff + all changed files covered."""
+        b = _rich_bundle()
+        b["mode"] = "change"
+        b["diff"] = "+++ b/src/auth.py\n- old\n+ new\n"
+        conf = bundle_confidence(b)
+        # 0.05 (diff) + 0.10 * (3/3 covered) = 0.15
+        self.assertEqual(conf["signals"]["mode_bonus"], 0.15)
+
+    def test_change_mode_bonus_no_diff(self):
+        """Change mode without diff → no bonus."""
+        b = _rich_bundle()
+        b["mode"] = "change"
+        conf = bundle_confidence(b)
+        # No diff text → only coverage part (sources exist in slices)
+        self.assertLess(conf["signals"]["mode_bonus"], 0.15)
+
+    def test_change_mode_bonus_no_slices(self):
+        """Change mode with diff but no slice coverage."""
+        b = _sparse_bundle()
+        b["mode"] = "change"
+        b["diff"] = "+++ b/src/x.py\n+ new\n"
+        conf = bundle_confidence(b)
+        # 0.05 (diff) + 0.0 (no slices) = 0.05
+        self.assertEqual(conf["signals"]["mode_bonus"], 0.05)
 
 
 if __name__ == "__main__":

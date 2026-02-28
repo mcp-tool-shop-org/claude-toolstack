@@ -157,25 +157,48 @@ def plan_refinements(
     if mode == "error":
         uncovered = _find_uncovered_trace_targets(bundle)
         if uncovered:
-            actions.append(_action_force_trace_slices(uncovered))
+            a = _action_force_trace_slices(uncovered)
+            paths = [t["path"] for t in uncovered]
+            a["trigger_reason"] = (
+                f"{len(uncovered)} trace file(s) missing slices: "
+                + ", ".join(paths[:3])
+            )
+            actions.append(a)
 
     elif mode == "symbol":
         uncov_defs = _find_uncovered_def_files(bundle)
         if uncov_defs:
-            actions.append(_action_pin_def_slices(uncov_defs))
+            a = _action_pin_def_slices(uncov_defs)
+            a["trigger_reason"] = (
+                f"{len(uncov_defs)} def file(s) missing slices"
+            )
+            actions.append(a)
         uncov_callers = _find_uncovered_caller_files(bundle)
         if uncov_callers:
-            actions.append(_action_expand_callers(uncov_callers))
+            a = _action_expand_callers(uncov_callers)
+            a["trigger_reason"] = (
+                f"{len(uncov_callers)} caller file(s) missing slices"
+            )
+            actions.append(a)
 
     elif mode == "change":
         uncov_changed = _find_uncovered_changed_files(bundle)
         if uncov_changed:
-            actions.append(_action_focus_changed_files(uncov_changed))
+            a = _action_focus_changed_files(uncov_changed)
+            a["trigger_reason"] = (
+                f"{len(uncov_changed)} changed file(s) missing slices"
+            )
+            actions.append(a)
         ident_count = _count_diff_idents(bundle)
         # If diff has identifiers but slice/symbol coverage is low,
         # expand the identifier search cap
         if ident_count > 0 and signals.get("slice_coverage", 0.0) < 0.1:
-            actions.append(_action_expand_diff_idents(ident_count))
+            a = _action_expand_diff_idents(ident_count)
+            a["trigger_reason"] = (
+                f"{ident_count} diff idents found but slice_coverage "
+                f"< 0.1 ({signals.get('slice_coverage', 0.0):.3f})"
+            )
+            actions.append(a)
 
     # --- Generic actions ---
 
@@ -183,12 +206,20 @@ def plan_refinements(
     sources = bundle.get("ranked_sources", [])
     max_matches = params.get("max_matches", 50)
     if len(sources) < 5 and max_matches <= 50:
-        actions.append(_action_widen_search())
+        a = _action_widen_search()
+        a["trigger_reason"] = (
+            f"only {len(sources)} source(s), max_matches={max_matches}"
+        )
+        actions.append(a)
 
     # Priority 2: If low slice coverage, add more slices
     slice_coverage = signals.get("slice_coverage", 0.0)
     if slice_coverage < 0.1:
-        actions.append(_action_add_slices())
+        a = _action_add_slices()
+        a["trigger_reason"] = (
+            f"slice_coverage={slice_coverage:.3f} < 0.1"
+        )
+        actions.append(a)
 
     # Priority 3: If no definition found, try symbol lookup
     def_found = signals.get("definition_found", 0.0)
@@ -198,12 +229,20 @@ def plan_refinements(
         import re
 
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", query):
-            actions.append(_action_try_symbol())
+            a = _action_try_symbol()
+            a["trigger_reason"] = (
+                f"no definition found, query '{query}' looks like a symbol"
+            )
+            actions.append(a)
 
     # Priority 4: If globs are restricting results on later passes
     globs = params.get("path_globs")
     if globs and pass_number >= 2 and len(sources) < 3:
-        actions.append(_action_broaden_glob())
+        a = _action_broaden_glob()
+        a["trigger_reason"] = (
+            f"pass {pass_number}, only {len(sources)} source(s) with globs"
+        )
+        actions.append(a)
 
     # Limit to 2 actions per pass to keep it bounded
     return actions[:2]
@@ -476,6 +515,10 @@ def execute_refinements(
         action_records = []
         for a in actions:
             record: Dict[str, Any] = {"name": a["name"]}
+            # Always include trigger_reason if present
+            if "trigger_reason" in a:
+                record["trigger_reason"] = a["trigger_reason"]
+            # Action-specific metadata
             if a["name"] == "force_trace_slices":
                 targets = a.get("trace_targets", [])
                 record["trace_targets"] = [t["path"] for t in targets]

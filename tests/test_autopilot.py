@@ -1208,5 +1208,85 @@ class TestChangeModeExecution(unittest.TestCase):
         self.assertIn("src/server.py", slice_paths)
 
 
+# ---------------------------------------------------------------------------
+# Tests: trigger_reasons in pass records
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerReasons(unittest.TestCase):
+    def test_error_mode_action_has_trigger_reason(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        fts = [a for a in actions if a["name"] == "force_trace_slices"]
+        self.assertEqual(len(fts), 1)
+        self.assertIn("trigger_reason", fts[0])
+        self.assertIn("missing slices", fts[0]["trigger_reason"])
+
+    def test_symbol_mode_action_has_trigger_reason(self):
+        b = _symbol_bundle(defs_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        pds = [a for a in actions if a["name"] == "pin_def_slices"]
+        self.assertEqual(len(pds), 1)
+        self.assertIn("trigger_reason", pds[0])
+        self.assertIn("def file(s) missing slices", pds[0]["trigger_reason"])
+
+    def test_change_mode_action_has_trigger_reason(self):
+        b = _change_bundle(changed_in_slices=False)
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf)
+        fcf = [a for a in actions if a["name"] == "focus_changed_files"]
+        self.assertEqual(len(fcf), 1)
+        self.assertIn("trigger_reason", fcf[0])
+        self.assertIn("changed file(s) missing slices", fcf[0]["trigger_reason"])
+
+    def test_generic_widen_search_has_trigger_reason(self):
+        b = _low_conf_bundle()
+        conf = bundle_confidence(b)
+        actions = plan_refinements(b, conf, current_params={"max_matches": 50})
+        ws = [a for a in actions if a["name"] == "widen_search"]
+        self.assertEqual(len(ws), 1)
+        self.assertIn("trigger_reason", ws[0])
+        self.assertIn("source(s)", ws[0]["trigger_reason"])
+
+    def test_trigger_reasons_in_pass_records(self):
+        b = _error_bundle_with_trace(slices_cover_trace=False)
+
+        def _build(**kw):
+            return _error_bundle_with_trace(slices_cover_trace=True)
+
+        result = execute_refinements(
+            b,
+            build_fn=_build,
+            build_kwargs={"evidence_files": 5},
+            max_passes=1,
+        )
+        self.assertGreater(len(result["passes"]), 0)
+        p = result["passes"][0]
+        for detail in p["action_details"]:
+            self.assertIn("trigger_reason", detail)
+
+    def test_all_actions_have_trigger_reasons(self):
+        """Every action returned by plan_refinements should have a reason."""
+        bundles = [
+            _low_conf_bundle(),
+            _error_bundle_with_trace(slices_cover_trace=False),
+            _symbol_bundle(defs_in_slices=False),
+            _change_bundle(changed_in_slices=False),
+        ]
+        for b in bundles:
+            conf = bundle_confidence(b)
+            actions = plan_refinements(
+                b, conf, current_params={"max_matches": 50}
+            )
+            for a in actions:
+                self.assertIn(
+                    "trigger_reason", a,
+                    f"Action '{a['name']}' missing trigger_reason "
+                    f"for mode={b.get('mode')}"
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
