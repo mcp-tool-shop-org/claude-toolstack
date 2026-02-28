@@ -7,12 +7,15 @@ name = "claude-toolstack-cli"
 version = "0.2.0"
 description = "CLI client for Claude Toolstack gateway"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 # No external dependencies — stdlib only (urllib, json, argparse, uuid)
 
 [project.scripts]
 cts = "cts.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cts*"]
 
 [tool.ruff]
 target-version = "py310"
