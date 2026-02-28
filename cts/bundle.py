@@ -16,7 +16,6 @@ from cts import http
 from cts.ranking import (
     extract_trace_files,
     looks_like_stack_trace,
-    path_score,
     rank_matches,
 )
 
@@ -120,6 +119,7 @@ def build_default_bundle(
     context: int = DEFAULT_CONTEXT,
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
+    repo_root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
     rid = search_data.get("_request_id", request_id or "")
@@ -134,31 +134,11 @@ def build_default_bundle(
         matches,
         prefer_paths=prefer_paths,
         avoid_paths=avoid_paths,
+        repo_root=repo_root,
     )
 
-    # Ranked sources (all matches, scored)
-    for m in ranked:
-        p = m.get("path", "")
-        bundle["ranked_sources"].append(
-            {
-                "path": p,
-                "line": m.get("line", 0),
-                "score": round(path_score(p, prefer_paths, avoid_paths), 2),
-            }
-        )
-
-    # Trimmed match snippets
-    for m in ranked:
-        snippet = m.get("snippet", "").rstrip()
-        if len(snippet) > MAX_SNIPPET_LEN:
-            snippet = snippet[:MAX_SNIPPET_LEN] + "..."
-        bundle["matches"].append(
-            {
-                "path": m.get("path", ""),
-                "line": m.get("line", 0),
-                "snippet": snippet,
-            }
-        )
+    # Ranked sources + trimmed snippets
+    _populate_ranked_and_matches(bundle, ranked)
 
     # Top K file slices
     top_files = _dedupe_top_files(ranked, max_files)
@@ -186,6 +166,7 @@ def build_error_bundle(
     context: int = DEFAULT_CONTEXT,
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
+    repo_root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an error-aware evidence bundle.
 
@@ -213,30 +194,12 @@ def build_error_bundle(
         trace_files=trace_files,
         prefer_paths=prefer_paths,
         avoid_paths=avoid_paths,
+        repo_root=repo_root,
     )
 
-    for m in ranked:
-        p = m.get("path", "")
-        bundle["ranked_sources"].append(
-            {
-                "path": p,
-                "line": m.get("line", 0),
-                "score": round(path_score(p, prefer_paths, avoid_paths), 2),
-                "in_trace": p in {tf[0] for tf in trace_files},
-            }
-        )
-
-    for m in ranked:
-        snippet = m.get("snippet", "").rstrip()
-        if len(snippet) > MAX_SNIPPET_LEN:
-            snippet = snippet[:MAX_SNIPPET_LEN] + "..."
-        bundle["matches"].append(
-            {
-                "path": m.get("path", ""),
-                "line": m.get("line", 0),
-                "snippet": snippet,
-            }
-        )
+    # Ranked sources + trimmed snippets
+    trace_path_set = {tf[0] for tf in trace_files}
+    _populate_ranked_and_matches(bundle, ranked, trace_path_set)
 
     # If we have trace files, prioritize slices around trace lines
     if trace_files:
@@ -360,6 +323,36 @@ def build_change_bundle(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _populate_ranked_and_matches(
+    bundle: Dict[str, Any],
+    ranked: List[Dict[str, Any]],
+    trace_path_set: Optional[set] = None,
+) -> None:
+    """Fill ranked_sources and matches from ranked match list."""
+    for m in ranked:
+        p = m.get("path", "")
+        entry: Dict[str, Any] = {
+            "path": p,
+            "line": m.get("line", 0),
+            "score": m.get("_rank_score", 0.0),
+        }
+        if trace_path_set and p in trace_path_set:
+            entry["in_trace"] = True
+        bundle["ranked_sources"].append(entry)
+
+    for m in ranked:
+        snippet = m.get("snippet", "").rstrip()
+        if len(snippet) > MAX_SNIPPET_LEN:
+            snippet = snippet[:MAX_SNIPPET_LEN] + "..."
+        bundle["matches"].append(
+            {
+                "path": m.get("path", ""),
+                "line": m.get("line", 0),
+                "snippet": snippet,
+            }
+        )
 
 
 def _dedupe_top_files(

@@ -82,6 +82,11 @@ def _add_bundle_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Comma-separated path segments to demote (e.g. vendor,test)",
     )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        help="Local repo root for git recency scoring (optional)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +121,7 @@ def cmd_search(args: argparse.Namespace) -> None:
         mode = getattr(args, "bundle", "default")
         prefer = _parse_csv(getattr(args, "prefer_paths", None))
         avoid = _parse_csv(getattr(args, "avoid_paths", None))
+        repo_root = getattr(args, "repo_root", None)
 
         if mode == "error":
             error_text = getattr(args, "error_text", "") or ""
@@ -128,6 +134,7 @@ def cmd_search(args: argparse.Namespace) -> None:
                 context=args.context,
                 prefer_paths=prefer,
                 avoid_paths=avoid,
+                repo_root=repo_root,
             )
         else:
             b = bundle_mod.build_default_bundle(
@@ -138,6 +145,7 @@ def cmd_search(args: argparse.Namespace) -> None:
                 context=args.context,
                 prefer_paths=prefer,
                 avoid_paths=avoid,
+                repo_root=repo_root,
             )
         render.render_bundle(b)
         return

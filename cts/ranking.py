@@ -212,11 +212,12 @@ def rank_matches(
     trace_files: Optional[List[Tuple[str, int]]] = None,
     prefer_paths: Optional[List[str]] = None,
     avoid_paths: Optional[List[str]] = None,
+    repo_root: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Re-rank matches using path score + trace boost.
+    """Re-rank matches using path score + trace boost + recency.
 
     Returns a new list sorted by composite score (descending).
-    Recency is NOT applied here (requires git access, done separately).
+    If *repo_root* is provided, git recency is factored in.
     """
     trace_set = set()
     if trace_files:
@@ -234,7 +235,17 @@ def rank_matches(
         basename = path.rsplit("/", 1)[-1] if "/" in path else path
         if path in trace_set or basename in trace_set:
             score += 2.0
+        # Recency boost (only when repo_root is available)
+        if repo_root:
+            hours = file_recency_hours(repo_root, path)
+            score += recency_score(hours)
         scored.append((score, m))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [m for _, m in scored]
+    # Attach composite score to each match for downstream use
+    results = []
+    for s, m in scored:
+        m_copy = dict(m)
+        m_copy["_rank_score"] = round(s, 2)
+        results.append(m_copy)
+    return results
