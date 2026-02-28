@@ -17,6 +17,7 @@ Usage:
   cts corpus patch tuning.json --repos-yaml repos.yaml --format diff
   cts corpus apply tuning.json --repos-yaml repos.yaml [--dry-run]
   cts corpus rollback rollback.json
+  cts corpus evaluate before.jsonl after.jsonl --format markdown
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -571,6 +572,8 @@ def cmd_corpus(args: argparse.Namespace) -> None:
         _corpus_apply(args)
     elif action == "rollback":
         _corpus_rollback(args)
+    elif action == "evaluate":
+        _corpus_evaluate(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -902,6 +905,59 @@ def _corpus_rollback(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def _corpus_evaluate(args: argparse.Namespace) -> None:
+    from cts.corpus.evaluate import (
+        evaluate,
+        render_evaluation_json,
+        render_evaluation_markdown,
+        render_evaluation_text,
+    )
+    from cts.corpus.report import load_corpus
+
+    before_path: str = args.before
+    after_path: str = args.after
+    fmt: str = getattr(args, "eval_format", "text")
+    out_path: str | None = getattr(args, "out", None)
+
+    try:
+        before_records = load_corpus(before_path)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {before_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        after_records = load_corpus(after_path)
+    except FileNotFoundError:
+        print(
+            f"Error: file not found: {after_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    result = evaluate(before_records, after_records)
+
+    if fmt == "json":
+        output = render_evaluation_json(result)
+    elif fmt == "markdown":
+        output = render_evaluation_markdown(result)
+    else:
+        output = render_evaluation_text(result)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        verdict = result["comparison"]["verdict"]
+        print(
+            f"Evaluation: {out_path} (verdict: {verdict})",
+            file=sys.stderr,
+        )
+    else:
+        print(output)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -1153,6 +1209,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_crb.add_argument(
         "rollback_file",
         help="Path to rollback.json from a previous apply",
+    )
+
+    # corpus evaluate
+    p_ce = corpus_sub.add_parser(
+        "evaluate",
+        help="Compare before/after corpora to evaluate tuning impact",
+    )
+    p_ce.add_argument(
+        "before",
+        help="Path to baseline corpus JSONL (before tuning)",
+    )
+    p_ce.add_argument(
+        "after",
+        help="Path to updated corpus JSONL (after tuning)",
+    )
+    p_ce.add_argument(
+        "--format",
+        dest="eval_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Evaluation report format (default: text)",
+    )
+    p_ce.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write evaluation to file (default: stdout)",
     )
 
     return parser

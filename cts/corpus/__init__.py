@@ -18,6 +18,11 @@ from cts.corpus.apply import (
     rollback_from_backup,
     rollback_from_record,
 )
+from cts.corpus.evaluate import (
+    compare_kpis,
+    evaluate,
+    extract_kpis,
+)
 from cts.corpus.patch import (
     PatchItem,
     generate_patch_plan,
@@ -48,6 +53,9 @@ __all__ = [
     "check_risk_gate",
     "rollback_from_backup",
     "rollback_from_record",
+    "evaluate",
+    "extract_kpis",
+    "compare_kpis",
     "CorpusRecord",
     "PassRecord",
     "PatchItem",
