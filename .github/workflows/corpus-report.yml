@@ -15,6 +15,14 @@ on:
         description: 'Path to baseline corpus for evaluation (empty = skip)'
         required: false
         default: ''
+      run_experiment:
+        description: 'Run A/B experiment pipeline (true/false)'
+        required: false
+        default: 'false'
+      experiment_id:
+        description: 'Experiment ID (auto-generated if empty)'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -119,6 +127,44 @@ jobs:
             --format markdown \
             --out evaluation.md
 
+      # --- Experiment pipeline (opt-in) ---
+
+      - name: Init experiment
+        if: inputs.run_experiment == 'true' && inputs.emit_tuning == 'true'
+        run: |
+          EXP_ID="${{ inputs.experiment_id }}"
+          if [ -z "$EXP_ID" ]; then
+            cts corpus experiment init --out experiment.json
+          else
+            cts corpus experiment init \
+              --id "$EXP_ID" \
+              --out experiment.json
+          fi
+          echo "--- Experiment envelope ---"
+          cat experiment.json | python -m json.tool | head -30
+
+      - name: Propose variants
+        if: inputs.run_experiment == 'true' && inputs.emit_tuning == 'true'
+        run: |
+          mkdir -p experiment
+          cts corpus experiment propose \
+            --corpus tuning.json \
+            --repos-yaml repos.yaml \
+            --experiment experiment.json \
+            --out-dir experiment/
+
+      - name: Experiment summary
+        if: inputs.run_experiment == 'true' && inputs.emit_tuning == 'true'
+        run: |
+          echo "--- Experiment artifacts ---"
+          ls -la experiment/
+          echo ""
+          echo "--- Variant A tuning ---"
+          cat experiment/tuning_A.json | python -m json.tool | head -20
+          echo ""
+          echo "--- Variant B tuning ---"
+          cat experiment/tuning_B.json | python -m json.tool | head -20
+
       - name: Upload corpus artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -134,4 +180,6 @@ jobs:
             tuning.diff
             evaluation.json
             evaluation.md
+            experiment.json
+            experiment/
           retention-days: 90
