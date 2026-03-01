@@ -14,25 +14,39 @@
 services:
   # ----------------------------------------------------------------
   # Docker Socket Proxy — gateway never touches raw socket
-  # Only CONTAINERS + EXEC allowed; everything else denied.
+  # Exec-only model: gateway can inspect + exec into known containers.
+  # Cannot create containers, pull images, or mount volumes.
   # ----------------------------------------------------------------
   dockerproxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: claude-dockerproxy
     environment:
-      - CONTAINERS=1
-      - EXEC=1
-      - POST=1
+      # Allow only what gateway needs for exec + inspect:
+      - CONTAINERS=1  # GET /containers, /containers/{id}/json
+      - EXEC=1        # POST /containers/{id}/exec, POST /exec/{id}/start
+      - POST=1        # Required for exec create/start
+      - LOGS=1        # GET /containers/{id}/logs
+      - INFO=1        # GET /info (used by cts doctor)
+      - PING=1        # GET /_ping (health checks)
+      # Explicitly deny higher-risk surfaces:
       - IMAGES=0
-      - SERVICES=0
-      - SYSTEM=0
+      - BUILD=0
       - NETWORKS=0
+      - SERVICES=0
+      - TASKS=0
+      - SWARM=0
+      - NODES=0
       - VOLUMES=0
-      - INFO=0
+      - PLUGINS=0
+      - EVENTS=0
+      - SYSTEM=0
       - AUTH=0
+      - SECRETS=0
+      - CONFIGS=0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [tools-net]
+    cgroup_parent: "claude-gw.slice"
     restart: unless-stopped
 
   # ----------------------------------------------------------------
@@ -63,8 +77,33 @@ services:
     networks: [tools-net]
     mem_limit: 1g
     cpus: "2"
-    cgroup_parent: "claude-index.slice"
+    cgroup_parent: "claude-gw.slice"
     restart: unless-stopped
+    depends_on:
+      - dockerproxy
+
+  # ----------------------------------------------------------------
+  # Toolstack CLI — run cts commands inside the Docker stack
+  # Usage: docker compose run --rm toolstack cts doctor
+  #        or use scripts/cts-docker wrapper
+  # ----------------------------------------------------------------
+  toolstack:
+    build: .
+    container_name: claude-toolstack
+    profiles: [cli]
+    env_file: .env
+    environment:
+      - DOCKER_HOST=tcp://dockerproxy:2375
+    volumes:
+      - type: bind
+        source: /workspace/repos
+        target: /repos
+        read_only: true
+      - type: volume
+        source: gw-cache
+        target: /cache
+    networks: [tools-net]
+    cgroup_parent: "claude-gw.slice"
     depends_on:
       - dockerproxy
 

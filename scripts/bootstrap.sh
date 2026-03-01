@@ -58,14 +58,14 @@ echo "[OK] sysctl applied"
 # 4. systemd slices
 # ---------------------------------------------------------------
 echo "[INFO] Installing systemd slices..."
-for slice in claude-index.slice claude-lsp.slice claude-build.slice claude-vector.slice; do
+for slice in claude-gw.slice claude-index.slice claude-lsp.slice claude-build.slice claude-vector.slice; do
     cp "$REPO_DIR/systemd/$slice" "/etc/systemd/system/$slice"
 done
 systemctl daemon-reload
 echo "[OK] Slices installed"
 
 # Verify slices are loadable
-for slice in claude-index claude-lsp claude-build claude-vector; do
+for slice in claude-gw claude-index claude-lsp claude-build claude-vector; do
     if systemctl cat "${slice}.slice" &>/dev/null; then
         echo "  [OK] ${slice}.slice"
     else
@@ -116,7 +116,7 @@ echo "[OK] Service installed. Enable with: systemctl enable --now claude-toolsta
 echo ""
 echo "=== Bootstrap complete ==="
 echo "Swap:    $(swapon --show --noheadings | head -1 || echo 'none')"
-echo "Slices:  claude-index, claude-lsp, claude-build, claude-vector"
+echo "Slices:  claude-gw, claude-index, claude-lsp, claude-build, claude-vector"
 echo ""
 echo "Next steps:"
 echo "  1. Copy .env.example to .env and set API_KEY"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude tool farm — gateway slice
+
+[Slice]
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+
+# Gateway is lightweight — mostly HTTP + ripgrep
+MemoryHigh=2G
+MemoryMax=4G
+MemorySwapMax=1G
+IOWeight=90

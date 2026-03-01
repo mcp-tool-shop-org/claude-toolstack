@@ -311,6 +311,103 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             )
         )
 
+    # --- Check 7: Docker environment ---
+    docker_host = os.environ.get("DOCKER_HOST", "")
+    if docker_host:
+        checks.append(("Docker host", "PASS", f"DOCKER_HOST={docker_host}"))
+    else:
+        checks.append(
+            (
+                "Docker host",
+                "WARN",
+                "DOCKER_HOST not set (Docker features unavailable)",
+            )
+        )
+
+    # --- Check 8: Docker proxy reachability ---
+    _docker_ok = False
+    if docker_host:
+        try:
+            import urllib.request
+
+            ping_url = docker_host.replace("tcp://", "http://")
+            ping_url = ping_url.rstrip("/") + "/_ping"
+            req = urllib.request.Request(ping_url, method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                resp.read()  # drain response
+                if resp.status == 200:
+                    checks.append(
+                        (
+                            "Docker proxy",
+                            "PASS",
+                            f"Reachable at {docker_host}",
+                        )
+                    )
+                    _docker_ok = True
+                else:
+                    checks.append(
+                        (
+                            "Docker proxy",
+                            "WARN",
+                            f"Unexpected status {resp.status}",
+                        )
+                    )
+        except Exception as e:
+            checks.append(
+                (
+                    "Docker proxy",
+                    "WARN",
+                    f"Not reachable: {e}",
+                )
+            )
+
+    # --- Check 9: Expected tool containers ---
+    if _docker_ok:
+        try:
+            import urllib.request
+
+            api_url = docker_host.replace("tcp://", "http://")
+            api_url = api_url.rstrip("/") + "/containers/json"
+            req = urllib.request.Request(api_url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                containers = json.loads(resp.read().decode())
+            running = set()
+            for c in containers:
+                for name in c.get("Names", []):
+                    running.add(name.lstrip("/"))
+
+            expected = os.environ.get(
+                "ALLOWED_CONTAINERS", "claude-ctags,claude-build"
+            ).split(",")
+            for cname in expected:
+                cname = cname.strip()
+                if not cname:
+                    continue
+                if cname in running:
+                    checks.append(
+                        (
+                            f"Container [{cname}]",
+                            "PASS",
+                            "Running",
+                        )
+                    )
+                else:
+                    checks.append(
+                        (
+                            f"Container [{cname}]",
+                            "WARN",
+                            "Not running",
+                        )
+                    )
+        except Exception as e:
+            checks.append(
+                (
+                    "Containers",
+                    "WARN",
+                    f"Could not list containers: {e}",
+                )
+            )
+
     # --- Output ---
     if fmt == "json":
         result = [{"check": c[0], "status": c[1], "detail": c[2]} for c in checks]

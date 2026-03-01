@@ -112,6 +112,52 @@ class TestDoctor:
         assert len(sem_checks) >= 1
         assert sem_checks[0]["status"] == "WARN"
 
+    def test_doctor_docker_host_detected(self, monkeypatch, tmp_path):
+        """Doctor reports PASS when DOCKER_HOST is set."""
+        (tmp_path / "repos.yaml").touch()
+        monkeypatch.setenv("DOCKER_HOST", "tcp://localhost:2375")
+
+        out, _ = self._run_doctor(monkeypatch, fmt="json", cwd=str(tmp_path))
+        data = json.loads(out)
+        dh = [c for c in data if c["check"] == "Docker host"]
+        assert len(dh) == 1
+        assert dh[0]["status"] == "PASS"
+        assert "tcp://localhost:2375" in dh[0]["detail"]
+
+    def test_doctor_docker_host_missing(self, monkeypatch, tmp_path):
+        """Doctor warns when DOCKER_HOST is not set."""
+        (tmp_path / "repos.yaml").touch()
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+
+        out, _ = self._run_doctor(monkeypatch, fmt="json", cwd=str(tmp_path))
+        data = json.loads(out)
+        dh = [c for c in data if c["check"] == "Docker host"]
+        assert len(dh) == 1
+        assert dh[0]["status"] == "WARN"
+
+    def test_doctor_docker_proxy_unreachable(self, monkeypatch, tmp_path):
+        """Docker proxy shows WARN when not reachable."""
+        (tmp_path / "repos.yaml").touch()
+        # Point to a port nothing is listening on
+        monkeypatch.setenv("DOCKER_HOST", "tcp://127.0.0.1:19999")
+
+        out, _ = self._run_doctor(monkeypatch, fmt="json", cwd=str(tmp_path))
+        data = json.loads(out)
+        dp = [c for c in data if c["check"] == "Docker proxy"]
+        assert len(dp) == 1
+        assert dp[0]["status"] == "WARN"
+        assert "Not reachable" in dp[0]["detail"]
+
+    def test_doctor_containers_not_checked_without_docker(self, monkeypatch, tmp_path):
+        """Container checks are skipped when Docker is unavailable."""
+        (tmp_path / "repos.yaml").touch()
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+
+        out, _ = self._run_doctor(monkeypatch, fmt="json", cwd=str(tmp_path))
+        data = json.loads(out)
+        container_checks = [c for c in data if c["check"].startswith("Container [")]
+        assert len(container_checks) == 0
+
 
 # ---------------------------------------------------------------------------
 # cts perf
