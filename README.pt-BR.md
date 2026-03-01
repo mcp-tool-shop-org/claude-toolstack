@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.md">English</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.pt-BR.md">Português (BR)</a>
+  <a href="README.ja.md">日本語</a> | <a href="README.zh.md">中文</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.hi.md">हिन्दी</a> | <a href="README.it.md">Italiano</a> | <a href="README.md">English</a>
 </p>
 
 <p align="center">
@@ -20,13 +20,13 @@
 
 ---
 
-## Ce qu'est ceci
+## O que é isso
 
-Un ensemble de logiciels prêt à être déployé qui permet à Claude Code de fonctionner efficacement sur de grands référentiels multilingues, sans surcharger une station de travail Linux de 64 Go.
+Um conjunto de ferramentas pronto para uso que mantém o Claude Code produtivo em repositórios grandes e multilíngues, sem sobrecarregar uma estação de trabalho Linux de 64 GB.
 
-**Idée principale :** Ne chargez pas le référentiel dans Claude. Conservez des index durables à proximité du code, dans des conteneurs avec une gestion des ressources. Transmettez uniquement les informations les plus pertinentes à Claude via une passerelle HTTP légère.
+**Ideia central:** não carregue todo o repositório no Claude. Mantenha índices duráveis próximos ao código em contêineres com restrições de recursos. Transmita apenas as evidências mínimas necessárias de volta para o Claude por meio de um gateway HTTP leve.
 
-## Architecture
+## Arquitetura
 
 ```
 64-GB Linux host (Ubuntu 22.04 / Fedora 38)
@@ -46,83 +46,83 @@ Un ensemble de logiciels prêt à être déployé qui permet à Claude Code de f
     └── calls gateway → gets bounded evidence
 ```
 
-## Démarrage rapide
+## Início rápido
 
-### 1. Initialisation du serveur
+### 1. Inicialize o host
 
 ```bash
 sudo ./scripts/bootstrap.sh
 ```
 
-Cela installe :
-- zram swap (Ubuntu) ou vérifie swap-on-zram (Fedora)
-- Optimisation de Sysctl (swappiness, montages inotify)
-- Tranches systemd avec gestion de la mémoire MemoryHigh/Max
-- Configuration du démon Docker (pilote de journalisation local)
-- claude-toolstack.service (gestion du démarrage)
+Isso instala:
+- zram swap (Ubuntu) ou verifica swap-on-zram (Fedora)
+- Ajustes do Sysctl (swappiness, inotify watches)
+- Slices do systemd com governança MemoryHigh/Max
+- Configuração do daemon Docker (driver de log local)
+- claude-toolstack.service (gerenciamento de inicialização)
 
-### 2. Configuration
+### 2. Configure
 
 ```bash
 cp .env.example .env
 # Edit .env: set API_KEY, ALLOWED_REPOS, etc.
 ```
 
-### 3. Clonage des référentiels
+### 3. Clone os repositórios
 
 ```bash
 # Repos go under /workspace/repos/<org>/<repo>
 git clone https://github.com/myorg/myrepo /workspace/repos/myorg/myrepo
 ```
 
-### 4. Démarrage de l'ensemble de logiciels
+### 4. Inicie o conjunto de ferramentas
 
 ```bash
 docker compose up -d --build
 ```
 
-### 5. Vérification
+### 5. Verifique
 
 ```bash
 ./scripts/smoke-test.sh "$API_KEY" myorg/myrepo
 ./scripts/health.sh
 ```
 
-## API de la passerelle
+## API do gateway
 
-Tous les points de terminaison nécessitent l'en-tête `x-api-key`. La passerelle est uniquement accessible sur `127.0.0.1:8088`.
+Todos os endpoints requerem o cabeçalho `x-api-key`. O gateway se vincula apenas a `127.0.0.1:8088`.
 
-| Méthode | Point de terminaison | Fonction |
+| Método | Endpoint | Propósito |
 |--------|----------|---------|
-| `GET` | `/v1/status` | État + configuration |
-| `POST` | `/v1/search/rg` | Recherche avec filtres |
-| `POST` | `/v1/file/slice` | Récupération d'une plage de fichiers (maximum 800 lignes) |
-| `POST` | `/v1/index/ctags` | Création d'un index ctags (asynchrone) |
-| `POST` | `/v1/symbol/ctags` | Requête des définitions de symboles |
-| `POST` | `/v1/run/job` | Exécution de tests/constructions/analyses autorisés |
-| `GET` | `/v1/metrics` | Compteurs au format Prometheus |
+| `GET` | `/v1/status` | Saúde + configuração |
+| `POST` | `/v1/search/rg` | Ripgrep com proteções |
+| `POST` | `/v1/file/slice` | Busca de intervalo de arquivo (máximo de 800 linhas) |
+| `POST` | `/v1/index/ctags` | Criação de índice ctags (assíncrona) |
+| `POST` | `/v1/symbol/ctags` | Consulta de definições de símbolos |
+| `POST` | `/v1/run/job` | Execução de testes/compilações/análises permitidos |
+| `GET` | `/v1/metrics` | Contadores no formato Prometheus |
 
-Toutes les réponses incluent `X-Request-ID` pour la corrélation de bout en bout. Les clients peuvent envoyer leur propre ID via l'en-tête `X-Request-ID`.
+Todas as respostas incluem `X-Request-ID` para correlação de ponta a ponta. Os clientes podem enviar seus próprios usando o cabeçalho `X-Request-ID`.
 
 ## CLI (`cts`)
 
-Une CLI Python sans dépendances qui encapsule tous les points de terminaison de la passerelle.
+Uma CLI Python sem dependências que envolve todos os endpoints do gateway.
 
-### Installation
+### Instalação
 
 ```bash
 pip install -e .
 # or: pipx install -e .
 ```
 
-### Configuration
+### Configuração
 
 ```bash
 export CLAUDE_TOOLSTACK_API_KEY=<your-key>
 export CLAUDE_TOOLSTACK_URL=http://127.0.0.1:8088  # default
 ```
 
-### Utilisation
+### Uso
 
 ```bash
 # Gateway health
@@ -158,16 +158,16 @@ cts semantic search "what does auth do?" --repo myorg/myrepo
 # All commands support: --format json|text|claude --request-id <id> --debug
 ```
 
-### Paquets de preuves v2 (`--format claude`)
+### Pacotes de evidências v2 (`--format claude`)
 
-Le mode de sortie `--claude` génère des paquets de preuves compacts, prêts à être copiés, avec des en-têtes structurés v2. Quatre modes de paquet sont disponibles :
+O modo de saída `--claude` produz pacotes de evidências compactos e prontos para colar, com cabeçalhos estruturados v2. Quatro modos de pacote estão disponíveis:
 
-| Mode | Indicateur | Ce qu'il fait |
+| Modo | Flag | O que ele faz |
 |------|------|-------------|
-| `default` | `--bundle default` | Recherche + correspondances classées + extraits de contexte |
-| `error` | `--bundle error` | Conscient des traces de pile : extrait les fichiers de la trace, améliore le classement |
-| `symbol` | `--bundle symbol` | Définitions + sites d'appel à partir de la recherche |
-| `change` | `--bundle change` | Diff Git + extraits de contexte |
+| `default` | `--bundle default` | Busca + correspondências classificadas + fatias de contexto |
+| `error` | `--bundle error` | Consciente de rastreamento de pilha: extrai arquivos do rastreamento, aumenta a classificação |
+| `symbol` | `--bundle symbol` | Definições + locais de chamada da busca |
+| `change` | `--bundle change` | Diferença do Git + fatias de contexto do "hunk" |
 
 ```bash
 # Default bundle (search + slices)
@@ -189,9 +189,9 @@ cts search "handler" --repo myorg/myrepo --format claude \
   --repo-root /workspace/repos/myorg/myrepo
 ```
 
-Réglage : `--evidence-files 5` (nombre de fichiers à extraire), `--context 30` (nombre de lignes autour de la correspondance).
+Ajuste: `--evidence-files 5` (número de arquivos a serem fatiados), `--context 30` (número de linhas ao redor do resultado).
 
-### Exemples curl
+### Exemplos de curl
 
 ```bash
 # Search
@@ -210,58 +210,58 @@ curl -sS -H "x-api-key: $KEY" -H "content-type: application/json" \
   http://127.0.0.1:8088/v1/run/job | jq
 ```
 
-## Gestion des ressources
+## Governança de recursos
 
-Les tranches systemd appliquent MemoryHigh (limitation) et MemoryMax (limite stricte) par groupe de services :
+Slices do systemd impõem MemoryHigh (limitação de velocidade) e MemoryMax (limite máximo) por grupo de serviços:
 
-| Tranche | MemoryHigh | MemoryMax | Fonction |
+| Slice | MemoryHigh | MemoryMax | Propósito |
 |-------|-----------|-----------|---------|
-| `claude-gw` | 2 Go | 4 Go | Passerelle + proxy de socket |
-| `claude-index` | 6 Go | 10 Go | Indexeurs, recherche |
-| `claude-lsp` | 8 Go | 16 Go | Serveurs de langage |
-| `claude-build` | 10 Go | 18 Go | Exécuteurs de construction/tests |
-| `claude-vector` | 8 Go | 16 Go | Base de données vectorielle (facultatif) |
+| `claude-gw` | 2 GB | 4 GB | Gateway + proxy de socket |
+| `claude-index` | 6 GB | 10 GB | Indexadores, busca |
+| `claude-lsp` | 8 GB | 16 GB | Servidores de linguagem |
+| `claude-build` | 10 GB | 18 GB | Executores de compilação/teste |
+| `claude-vector` | 8 GB | 16 GB | Banco de dados vetorial (opcional) |
 
-Ce sont les valeurs par défaut pour les référentiels de taille moyenne. Modifiez les fichiers de tranche dans `systemd/` en fonction de votre charge de travail.
+Estes são os valores padrão para repositórios de tamanho médio. Edite os arquivos de slice em `systemd/` para sua carga de trabalho.
 
-Système d'exploitation + marge de sécurité : 10 à 14 Go sont toujours réservés pour le cache du système de fichiers, le bureau et SSH.
+Sistema operacional + espaço livre: 10-14 GB sempre reservados para o cache do sistema de arquivos, desktop, SSH.
 
-## Sécurité
+## Segurança
 
-### Modèle de menace
+### Modelo de ameaças
 
-**Ce contre quoi nous nous protégeons :**
-- Abus de la passerelle (accès non autorisé, épuisement des ressources)
-- Traversal de chemin (échappement de la racine du référentiel via `../` ou des liens symboliques)
-- Escalade de socket Docker (socket brut = équivalent à root)
-- Surcharge de la sortie (résultats de recherche/construction illimités consommant de la mémoire)
+**O que protegemos:**
+- Abuso do gateway (acesso não autorizado, esgotamento de recursos)
+- Travessia de caminho (escape da raiz do repositório via `../` ou links simbólicos)
+- Escalada do socket Docker (socket bruto = equivalente à raiz)
+- Inundação de saída (resultados de busca/compilação ilimitados consumindo memória)
 
-**Couches de sécurité :**
+**Camadas de segurança:**
 
-| Couche | Mécanisme |
+| Camada | Mecanismo |
 |-------|-----------|
-| Authentification | Clé API (`x-api-key` en-tête), configurable |
-| Réseau | La passerelle est uniquement accessible sur `127.0.0.1` |
-| Docker | Proxy de socket (Tecnativa), uniquement `CONTAINERS+EXEC` |
-| Référentiels | Liste blanche/liste noire avec prise en charge des caractères génériques. |
-| Chemins d'accès. | Environnement restreint par `realpath`, rejet des octets nuls. |
-| Commandes. | Seule la liste blanche prédéfinie est autorisée, aucune exécution arbitraire. |
-| Sortie. | Limite de 512 Ko, troncature des lignes. |
-| Limitation du débit. | "Bucket" de jetons par clé + adresse IP. |
-| Audit. | Journalisation au format JSONL, clé hachée, rotation des journaux. |
-| Conteneurs. | Liste blanche nommée, sans caractères génériques. |
-| Ressources. | Slices cgroup v2, limites de mémoire/CPU par conteneur. |
+| Autenticação | Chave de API (`x-api-key` header), configurável |
+| Rede | O gateway se vincula apenas a `127.0.0.1` |
+| Docker | Proxy de socket (Tecnativa), apenas `CONTAINERS+EXEC` |
+| Repositórios | Lista de permissões/proibição com suporte a padrões globais. |
+| Caminhos. | "Jail" com `realpath`, rejeição de bytes nulos. |
+| Comandos. | Apenas lista de permissões predefinida, sem execução arbitrária. |
+| Saída. | Limite de 512 KB, truncamento de linhas. |
+| Limite de taxa. | "Token bucket" por chave + IP. |
+| Auditoria. | Registro em formato JSONL, chave criptografada, com rotação. |
+| Contêineres. | Lista de permissões nomeada, sem curingas. |
+| Recursos. | Fatias cgroup v2, limites de memória/CPU por contêiner. |
 
-### Ce que la passerelle ne peut pas faire
+### O que o gateway não pode fazer
 
-- Exécuter des commandes arbitraires (seule la liste blanche prédéfinie est autorisée).
-- Accéder aux dépôts situés en dehors de `/workspace/repos` (environnement restreint par chemin).
-- Modifier les images Docker, les volumes, les réseaux ou le système (blocage par proxy).
-- Renvoyer une sortie illimitée (limite stricte de 512 Ko).
-- Accepter les connexions provenant d'adresses autres que localhost (adresse de liaison).
-- Collecter ou envoyer des données télémétriques — **pas de télémétrie, pas de signalement, pas d'analyse**.
+- Executar comandos arbitrários (apenas lista de permissões predefinida).
+- Acessar repositórios fora de `/workspace/repos` (jail de caminhos).
+- Modificar imagens Docker, volumes, redes ou o sistema (bloqueios do proxy).
+- Retornar saída ilimitada (limite máximo de 512 KB).
+- Aceitar conexões de endereços diferentes de localhost (endereço de vinculação).
+- Coletar ou enviar telemetria — **sem telemetria, sem envio de dados, sem análise**.
 
-## Structure des répertoires
+## Estrutura de diretórios
 
 ```
 claude-toolstack/
@@ -307,34 +307,34 @@ claude-toolstack/
     └── tuning.md          # Slice tuning guide
 ```
 
-## Intégration Claude Code
+## Integração com Claude Code
 
 ### Linux local
 
-Claude Code s'exécute directement sur l'hôte. Configurez la passerelle en tant que serveur MCP ou appelez-la via HTTP à partir des scripts de tâches.
+O Claude Code é executado diretamente no host. Configure o gateway como um servidor MCP ou chame-o via HTTP a partir de scripts de tarefas.
 
-### Distante (macOS/Windows)
+### Remoto (macOS/Windows)
 
-Utilisez l'onglet Code de Claude Desktop avec un environnement SSH pointant vers votre hôte Linux. La ferme d'outils s'exécute sur l'hôte ; l'interface graphique reste sur votre ordinateur portable.
+Use a aba "Code" do Claude Desktop com um ambiente SSH apontando para o seu host Linux. A "fazenda" de ferramentas é executada no host; a interface gráfica permanece no seu laptop.
 
-## Optimisation
+## Ajustes
 
-Consultez [docs/tuning.md](docs/tuning.md) pour :
-- Dimensionnement des slices en fonction de la taille du dépôt (petit/moyen/grand).
-- Surveillance de PSI et détection des blocages.
-- Ajout de serveurs de langage (clangd, rust-analyzer, tsserver).
-- Options de stockage vectoriel (SQLite+FAISS, Weaviate, Milvus).
-- Personnalisation des paramètres des tâches.
+Consulte [docs/tuning.md](docs/tuning.md) para:
+- Dimensionamento de fatias com base no tamanho do repositório (pequeno/médio/grande).
+- Monitoramento de PSI e detecção de sobrecarga.
+- Adição de servidores de linguagem (clangd, rust-analyzer, tsserver).
+- Opções de armazenamento vetorial (SQLite+FAISS, Weaviate, Milvus).
+- Personalização de configurações de tarefas.
 
-## Validation sans blocage
+## Validação sem sobrecarga
 
-Après le déploiement, vérifiez :
+Após a implantação, confirme:
 
-1. **PSI complet proche de zéro** : `watch -n 1 'cat /proc/pressure/memory'`
-2. **Les conteneurs atteignent MemoryHigh avant Max** : vérifiez l'état du slice.
-3. **SSH reste réactif** : pendant l'indexation et la compilation.
-4. **L'isolation fonctionne** : réduisez la limite d'un service, exécutez une tâche lourde, vérifiez que seul ce conteneur plante.
+1. **PSI total próximo de zero**: `watch -n 1 'cat /proc/pressure/memory'`
+2. **Contêineres atingem MemoryHigh antes de Max**: verifique o status da fatia.
+3. **SSH permanece responsivo**: durante a indexação e compilação.
+4. **O isolamento funciona**: diminua o limite de um serviço, execute uma tarefa pesada e confirme que apenas esse contêiner falha.
 
 ---
 
-Créé par <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>.
+Criado por <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
