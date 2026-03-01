@@ -55,6 +55,17 @@ from cts.corpus.tuning_schema import (
     TuningRecommendation,
     generate_tuning,
 )
+from cts.corpus.trends import (
+    compute_kpi_trends,
+    compute_regressions,
+    compute_win_rates,
+    compute_winning_knobs,
+    extract_data_points,
+    generate_dashboard,
+    render_dashboard_json,
+    render_dashboard_markdown,
+    render_dashboard_text,
+)
 from cts.corpus.variants import (
     generate_variants,
     make_variant_tuning,
@@ -102,4 +113,13 @@ __all__ = [
     "generate_variants",
     "make_variant_tuning",
     "propose_experiment",
+    "extract_data_points",
+    "compute_win_rates",
+    "compute_kpi_trends",
+    "compute_winning_knobs",
+    "compute_regressions",
+    "generate_dashboard",
+    "render_dashboard_markdown",
+    "render_dashboard_json",
+    "render_dashboard_text",
 ]

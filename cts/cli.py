@@ -24,6 +24,7 @@ Usage:
   cts corpus experiment show EXP123 --root experiments/
   cts corpus experiment archive --experiment exp.json --result result.json
   cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
+  cts corpus experiment trend --root experiments/ --format markdown
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -993,6 +994,8 @@ def _corpus_experiment(args: argparse.Namespace) -> None:
         _experiment_list(args)
     elif exp_action == "show":
         _experiment_show(args)
+    elif exp_action == "trend":
+        _experiment_trend(args)
 
 
 def _experiment_init(args: argparse.Namespace) -> None:
@@ -1285,6 +1288,48 @@ def _experiment_evaluate(args: argparse.Namespace) -> None:
         winner = result.get("winner") or "none"
         print(
             f"Experiment eval: {out_path} (verdict: {verdict}, winner: {winner})",
+            file=sys.stderr,
+        )
+    else:
+        print(output)
+
+
+def _experiment_trend(args: argparse.Namespace) -> None:
+    from cts.corpus.trends import (
+        generate_dashboard,
+        render_dashboard_json,
+        render_dashboard_markdown,
+        render_dashboard_text,
+    )
+
+    root = getattr(args, "registry_root", "experiments")
+    fmt = getattr(args, "trend_format", "text")
+    out_path = getattr(args, "out", None)
+    window_days: Optional[float] = getattr(args, "window", None)
+    primary_kpi: Optional[str] = getattr(args, "primary_kpi", None)
+    group_by: Optional[str] = getattr(args, "group_by", None)
+
+    dashboard = generate_dashboard(
+        root,
+        window_days=window_days,
+        primary_kpi=primary_kpi,
+        group_by=group_by,
+    )
+
+    if fmt == "json":
+        output = render_dashboard_json(dashboard)
+    elif fmt == "markdown":
+        output = render_dashboard_markdown(dashboard)
+    else:
+        output = render_dashboard_text(dashboard)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        total = dashboard.get("total_experiments", 0)
+        with_results = dashboard.get("with_results", 0)
+        print(
+            f"Dashboard: {out_path} ({total} experiments, {with_results} with results)",
             file=sys.stderr,
         )
     else:
@@ -1782,6 +1827,49 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Write result to file (default: stdout)",
+    )
+
+    # corpus experiment trend
+    p_et = exp_sub.add_parser(
+        "trend",
+        help="Generate trend dashboard from experiment registry",
+    )
+    p_et.add_argument(
+        "--root",
+        dest="registry_root",
+        default="experiments",
+        help="Registry root directory (default: experiments/)",
+    )
+    p_et.add_argument(
+        "--format",
+        dest="trend_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    p_et.add_argument(
+        "--window",
+        type=float,
+        default=None,
+        metavar="DAYS",
+        help="Only include experiments from last N days",
+    )
+    p_et.add_argument(
+        "--primary-kpi",
+        default=None,
+        help="Filter by primary KPI name",
+    )
+    p_et.add_argument(
+        "--group-by",
+        default=None,
+        choices=["strategy", "mode", "winner"],
+        help="Grouping strategy (future use)",
+    )
+    p_et.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write dashboard to file (default: stdout)",
     )
 
     return parser
