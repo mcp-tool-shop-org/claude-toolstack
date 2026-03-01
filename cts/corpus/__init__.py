@@ -40,6 +40,11 @@ from cts.corpus.archive import (
     archive_experiment,
     validate_registry_entry,
 )
+from cts.corpus.registry import (
+    filter_entries,
+    scan_registry,
+    show_experiment,
+)
 from cts.corpus.experiment_eval import (
     assign_records,
     evaluate_experiment,
@@ -88,6 +93,9 @@ __all__ = [
     "TuningRecommendation",
     "archive_experiment",
     "validate_registry_entry",
+    "scan_registry",
+    "filter_entries",
+    "show_experiment",
     "assign_records",
     "evaluate_experiment",
     "pick_winner",

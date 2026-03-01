@@ -20,6 +20,8 @@ Usage:
   cts corpus evaluate before.jsonl after.jsonl --format markdown
   cts corpus experiment init --id EXP1 --description "..." --out experiment.json
   cts corpus experiment propose --corpus tuning.json --repos-yaml repos.yaml
+  cts corpus experiment list --root experiments/ --format text
+  cts corpus experiment show EXP123 --root experiments/
   cts corpus experiment archive --experiment exp.json --result result.json
   cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
 
@@ -987,6 +989,10 @@ def _corpus_experiment(args: argparse.Namespace) -> None:
         _experiment_evaluate(args)
     elif exp_action == "archive":
         _experiment_archive(args)
+    elif exp_action == "list":
+        _experiment_list(args)
+    elif exp_action == "show":
+        _experiment_show(args)
 
 
 def _experiment_init(args: argparse.Namespace) -> None:
@@ -1116,6 +1122,70 @@ def _experiment_propose(args: argparse.Namespace) -> None:
             f"{v['active_patches']} active patch(es)",
             file=sys.stderr,
         )
+
+
+def _experiment_list(args: argparse.Namespace) -> None:
+    from cts.corpus.registry import (
+        filter_entries,
+        render_list_json,
+        render_list_markdown,
+        render_list_text,
+        scan_registry,
+    )
+
+    root: str = getattr(args, "registry_root", "experiments")
+    fmt: str = getattr(args, "list_format", "text")
+    winner_filter: str | None = getattr(args, "winner", None)
+    verdict_filter: str | None = getattr(args, "verdict", None)
+    since_days: float | None = getattr(args, "since_days", None)
+    pkpi_filter: str | None = getattr(args, "primary_kpi_filter", None)
+    contains: str | None = getattr(args, "contains", None)
+
+    entries = scan_registry(root)
+    entries = filter_entries(
+        entries,
+        winner=winner_filter,
+        verdict=verdict_filter,
+        since_days=since_days,
+        primary_kpi=pkpi_filter,
+        contains=contains,
+    )
+
+    if fmt == "json":
+        print(render_list_json(entries))
+    elif fmt == "markdown":
+        print(render_list_markdown(entries))
+    else:
+        print(render_list_text(entries))
+
+
+def _experiment_show(args: argparse.Namespace) -> None:
+    from cts.corpus.registry import (
+        find_experiment_dir,
+        render_show_text,
+        show_experiment,
+    )
+
+    exp_id: str = args.exp_id
+    root: str = getattr(args, "registry_root", "experiments")
+
+    exp_dir = find_experiment_dir(exp_id, root=root)
+    if exp_dir is None:
+        print(
+            f"Error: experiment not found: {exp_id}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    detail = show_experiment(exp_dir)
+    if detail is None:
+        print(
+            f"Error: could not load experiment: {exp_id}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    print(render_show_text(detail))
 
 
 def _experiment_archive(args: argparse.Namespace) -> None:
@@ -1584,6 +1654,68 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Strategy override: 'A=aggressive' (repeatable)",
+    )
+
+    # corpus experiment list
+    p_el = exp_sub.add_parser(
+        "list",
+        help="List experiments from the registry",
+    )
+    p_el.add_argument(
+        "--root",
+        dest="registry_root",
+        default="experiments",
+        help="Registry root directory (default: experiments/)",
+    )
+    p_el.add_argument(
+        "--format",
+        dest="list_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    p_el.add_argument(
+        "--winner",
+        default=None,
+        help="Filter by winner variant name",
+    )
+    p_el.add_argument(
+        "--verdict",
+        default=None,
+        help="Filter by verdict (winner/tie/no_data)",
+    )
+    p_el.add_argument(
+        "--since-days",
+        type=float,
+        default=None,
+        help="Only show experiments from last N days",
+    )
+    p_el.add_argument(
+        "--primary-kpi",
+        dest="primary_kpi_filter",
+        default=None,
+        help="Filter by primary KPI name",
+    )
+    p_el.add_argument(
+        "--contains",
+        default=None,
+        help="Search description/hypothesis/id for text",
+    )
+
+    # corpus experiment show
+    p_es = exp_sub.add_parser(
+        "show",
+        help="Show details of a specific experiment",
+    )
+    p_es.add_argument(
+        "exp_id",
+        help="Experiment ID to show",
+    )
+    p_es.add_argument(
+        "--root",
+        dest="registry_root",
+        default="experiments",
+        help="Registry root directory (default: experiments/)",
     )
 
     # corpus experiment archive
