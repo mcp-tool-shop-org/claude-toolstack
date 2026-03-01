@@ -27,6 +27,7 @@ Usage:
   cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
   cts corpus experiment trend --root experiments/ --format markdown
   cts semantic index --repo org/repo --root ./repo [--max-files N]
+  cts semantic search "what does auth do?" --repo org/repo
   cts semantic status --repo org/repo [--db PATH]
 
 Output modes: --json | --text (default) | --claude | --sidecar
@@ -1411,6 +1412,8 @@ def cmd_semantic(args: argparse.Namespace) -> None:
         _semantic_index(args)
     elif action == "status":
         _semantic_status(args)
+    elif action == "search":
+        _semantic_search(args)
     elif action == "rebuild":
         _semantic_rebuild(args)
 
@@ -1493,6 +1496,115 @@ def _semantic_status(args: argparse.Namespace) -> None:
     print(f"  Chunks:         {status['chunks']}")
     print(f"  Embeddings:     {status['embeddings']}")
     print(f"  Last indexed:   {status['last_indexed_at']}")
+
+
+def _semantic_search(args: argparse.Namespace) -> None:
+    import time as _time
+
+    from cts.semantic.embedder import create_embedder
+    from cts.semantic.search import cosine_search
+    from cts.semantic.store import SemanticStore
+
+    repo = args.repo
+    query: str = args.query
+    db_path = args.db or _default_db_path(repo)
+    topk = getattr(args, "topk", 8)
+    fmt = getattr(args, "search_format", "text")
+    device = getattr(args, "device", "auto")
+    mock = getattr(args, "mock", False)
+
+    if not os.path.exists(db_path):
+        print(
+            f"Error: no semantic index at {db_path}. "
+            f"Run: cts semantic index --repo {repo} --root <dir>",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    store = SemanticStore(db_path)
+    dim_str = store.get_meta("dim")
+    if not dim_str:
+        print(
+            "Error: no embeddings in store. Run index first.",
+            file=sys.stderr,
+        )
+        store.close()
+        raise SystemExit(1)
+
+    dim = int(dim_str)
+
+    # Embed the query
+    embedder = create_embedder(device=device, mock=mock)
+    t0 = _time.time()
+    query_vecs = embedder.embed_texts([query])
+    query_vec = query_vecs[0]
+
+    # Retrieve candidates
+    candidates = store.get_all_embeddings()
+    hits = cosine_search(query_vec, candidates, dim, topk=topk)
+    elapsed_ms = (_time.time() - t0) * 1000
+    store.close()
+
+    # Build result
+    result = {
+        "query": query,
+        "repo": repo,
+        "semantic_invoked": True,
+        "semantic_model": embedder.model_name,
+        "semantic_topk": topk,
+        "semantic_time_ms": round(elapsed_ms, 1),
+        "semantic_hits": [
+            {
+                "path": h.path,
+                "start_line": h.start_line,
+                "end_line": h.end_line,
+                "score": round(h.score, 4),
+            }
+            for h in hits
+        ],
+    }
+
+    if fmt == "json":
+        print(json.dumps(result, indent=2))
+    elif fmt == "markdown":
+        _render_semantic_hits_markdown(result)
+    else:
+        _render_semantic_hits_text(result)
+
+
+def _render_semantic_hits_text(result: dict) -> None:
+    print(f"Semantic search: {result['query']}")
+    print(f"  Model: {result['semantic_model']}")
+    print(
+        f"  Time: {result['semantic_time_ms']:.0f}ms, "
+        f"hits: {len(result['semantic_hits'])}"
+    )
+    print()
+    for i, hit in enumerate(result["semantic_hits"], 1):
+        print(
+            f"  {i}. {hit['path']}:{hit['start_line']}-"
+            f"{hit['end_line']} (score={hit['score']:.4f})"
+        )
+
+
+def _render_semantic_hits_markdown(result: dict) -> None:
+    print("## Semantic Hits")
+    print()
+    print(f"**Query:** {result['query']}")
+    print(
+        f"**Model:** {result['semantic_model']} | "
+        f"**Time:** {result['semantic_time_ms']:.0f}ms"
+    )
+    print()
+    if result["semantic_hits"]:
+        print("| # | Path | Lines | Score |")
+        print("|---|------|-------|------:|")
+        for i, hit in enumerate(result["semantic_hits"], 1):
+            lines = f"{hit['start_line']}-{hit['end_line']}"
+            print(f"| {i} | `{hit['path']}` | {lines} | {hit['score']:.4f} |")
+    else:
+        print("No semantic hits found.")
+    print()
 
 
 def _semantic_rebuild(args: argparse.Namespace) -> None:
@@ -2180,6 +2292,51 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="SQLite database path",
+    )
+
+    # semantic search
+    p_ssrch = sem_sub.add_parser(
+        "search",
+        help="Search semantic index by natural language query",
+    )
+    p_ssrch.add_argument(
+        "query",
+        help="Natural language search query",
+    )
+    p_ssrch.add_argument(
+        "--repo",
+        required=True,
+        help="Repository identifier",
+    )
+    p_ssrch.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="SQLite database path (default: auto)",
+    )
+    p_ssrch.add_argument(
+        "--topk",
+        type=int,
+        default=8,
+        help="Number of top results (default: 8)",
+    )
+    p_ssrch.add_argument(
+        "--format",
+        dest="search_format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    p_ssrch.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Compute device (default: auto)",
+    )
+    p_ssrch.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock embedder (for testing, no GPU)",
     )
 
     # semantic rebuild
