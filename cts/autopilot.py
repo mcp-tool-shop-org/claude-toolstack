@@ -264,6 +264,7 @@ def plan_refinements(
         # Branch A: sparse lexical — very few sources
         if len(sources) < 5:
             a = _action_semantic_fallback()
+            a["branch"] = "A"
             a["trigger_reason"] = (
                 f"[branch-A] confidence={conf['score']:.2f} < 0.5, "
                 f"only {len(sources)} source(s), "
@@ -274,6 +275,7 @@ def plan_refinements(
         # but top scores are weak (all shallow references)
         elif top_score_w < 0.15:
             a = _action_semantic_fallback()
+            a["branch"] = "B"
             a["trigger_reason"] = (
                 f"[branch-B] confidence={conf['score']:.2f} < 0.5, "
                 f"{len(sources)} source(s) but top_score_weight="
@@ -478,6 +480,7 @@ def apply_refinement(
         # The builder should: embed the query, search the semantic
         # store, and merge high-scoring chunk paths into the bundle.
         new_params["_semantic_invoked"] = True
+        new_params["_semantic_branch"] = action.get("branch", "?")
 
     # try_symbol doesn't change search params — it triggers a
     # separate ctags lookup in execute_refinements

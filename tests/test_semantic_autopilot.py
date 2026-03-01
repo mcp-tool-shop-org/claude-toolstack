@@ -790,6 +790,33 @@ class TestSemanticRetrieveAndSlice:
         assert slices == []
         assert debug["error"] == "empty_store"
 
+    def test_path_jail_blocks_traversal(self, tmp_path):
+        """_read_local_slice rejects paths that escape repo_root."""
+        from cts.bundle import _read_local_slice
+
+        repo_root = str(tmp_path / "repo")
+        (tmp_path / "repo").mkdir()
+        # Create a file outside repo root
+        (tmp_path / "secret.txt").write_text("secret data", encoding="utf-8")
+
+        # Traversal attempt
+        result = _read_local_slice(repo_root, "../secret.txt", 1, 1)
+        assert result is None
+
+    def test_path_jail_allows_valid_paths(self, tmp_path):
+        """_read_local_slice allows paths within repo_root."""
+        from cts.bundle import _read_local_slice
+
+        repo_root = str(tmp_path / "repo")
+        src_dir = tmp_path / "repo" / "src"
+        src_dir.mkdir(parents=True)
+        (src_dir / "valid.py").write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+        result = _read_local_slice(repo_root, "src/valid.py", 1, 3)
+        assert result is not None
+        assert result["path"] == "src/valid.py"
+        assert len(result["lines"]) > 0
+
 
 class TestBuildDefaultBundleSemantic:
     """Verify build_default_bundle with semantic augmentation."""
@@ -930,3 +957,27 @@ class TestBuildDefaultBundleSemantic:
         assert len(auth_slices) == 1
         # The existing one (no source tag) should be kept, not the semantic one
         assert auth_slices[0].get("source") != "semantic"
+
+    def test_branch_recorded_in_debug(self, tmp_path, monkeypatch):
+        """_semantic_branch is recorded in _debug.semantic.branch."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        monkeypatch.setattr(bundle_mod, "fetch_slices", lambda *a, **kw: [])
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(query="config"),
+            repo="test/repo",
+            repo_root=repo_root,
+            debug=True,
+            semantic_store_path=db_path,
+            _semantic_invoked=True,
+            _semantic_branch="B",
+        )
+
+        assert b["_debug"]["semantic"]["branch"] == "B"

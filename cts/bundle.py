@@ -255,11 +255,15 @@ def _read_local_slice(
     """Read a file slice directly from disk (no gateway needed).
 
     Returns a slice dict compatible with fetch_slices output,
-    or None if the file can't be read.
+    or None if the file can't be read or escapes repo_root.
     """
     import os
 
-    full_path = os.path.join(repo_root, path.replace("/", os.sep))
+    full_path = os.path.realpath(os.path.join(repo_root, path.replace("/", os.sep)))
+    real_root = os.path.realpath(repo_root)
+    # Path-jail: reject traversal outside repo root
+    if not full_path.startswith(real_root + os.sep) and full_path != real_root:
+        return None
     try:
         with open(full_path, encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
@@ -425,6 +429,7 @@ def build_default_bundle(
     diff_text: Optional[str] = None,
     semantic_store_path: Optional[str] = None,
     _semantic_invoked: bool = False,
+    _semantic_branch: str = "",
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
     timer = _Timer()
@@ -490,6 +495,8 @@ def build_default_bundle(
             topk=8,
             context=context,
         )
+        if _semantic_branch:
+            semantic_debug["branch"] = _semantic_branch
         # Merge: add semantic slices for paths not already covered
         for sl in sem_slices:
             if sl.get("path", "") not in existing_paths:
