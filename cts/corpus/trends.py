@@ -297,8 +297,23 @@ def generate_dashboard(
         "kpi_trends": compute_kpi_trends(points),
         "winning_knobs": compute_winning_knobs(points),
         "regressions": compute_regressions(entries),
-        "recent": entries[:10],
+        "recent": _summarize_recent(entries[:10]),
     }
+
+
+def _summarize_recent(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Trim registry entries to lightweight summaries for the dashboard."""
+    keep_keys = {
+        "exp_id",
+        "created_at",
+        "description",
+        "verdict",
+        "winner",
+        "primary_kpi",
+        "assignment_mode",
+        "variant_names",
+    }
+    return [{k: e[k] for k in keep_keys if k in e} for e in entries]
 
 
 # ---------------------------------------------------------------------------

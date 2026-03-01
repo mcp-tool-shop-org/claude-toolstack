@@ -165,6 +165,38 @@ jobs:
           echo "--- Variant B tuning ---"
           cat experiment/tuning_B.json | python -m json.tool | head -20
 
+      # --- Archive + Dashboard (runs after experiment pipeline) ---
+
+      - name: Archive experiment to registry
+        if: inputs.run_experiment == 'true' && inputs.emit_tuning == 'true'
+        run: |
+          if [ -f experiment.json ] && [ -f experiment/result.json ]; then
+            cts corpus experiment archive \
+              --experiment experiment.json \
+              --result experiment/result.json \
+              --root experiments/
+            echo "--- Archived experiment ---"
+            ls -la experiments/ || true
+          else
+            echo "Skipping archive: no experiment or result files"
+          fi
+
+      - name: Generate trend dashboard
+        if: inputs.run_experiment == 'true'
+        run: |
+          cts corpus experiment trend \
+            --root experiments/ \
+            --format markdown \
+            --out trend.md
+
+          cts corpus experiment trend \
+            --root experiments/ \
+            --format json \
+            --out trend.json
+
+          echo "--- Trend Dashboard ---"
+          cat trend.md || true
+
       - name: Upload corpus artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -182,4 +214,6 @@ jobs:
             evaluation.md
             experiment.json
             experiment/
+            trend.md
+            trend.json
           retention-days: 90
