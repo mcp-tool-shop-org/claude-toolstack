@@ -1,0 +1,37 @@
+{
+  "description": "30 mixed queries for Phase 4.1 smoke test. Tests Branch A (sparse) and Branch B (high-hit, weak scores) triggers.",
+  "queries": [
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "PayRunStateMachine", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "FundingGateConfig", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "reconcile_settlements", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "TrainingPreset", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "GPUSafetyConfig", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "ShardRunner", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "ObjectStore", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "ExecutorRegistry", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "phase8_gates", "_type": "identifier"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "PaymentOrchestrator", "_type": "identifier"},
+
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "config", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "error", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "service", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "process", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "config", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "error", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "validate", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "config", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "error", "_type": "common-term"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "validate", "_type": "common-term"},
+
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "rate limit", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "authentication", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "webhook", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/payroll-engine", "root": "F:/AI/payroll-engine", "query": "gateway", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "retry logic", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "rate limit", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/backpropagate", "root": "F:/AI/backpropagate", "query": "gateway", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "rate limit", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "webhook", "_type": "sparse-concept"},
+    {"repo": "mcp-tool-shop-org/code-batch", "root": "F:/AI/code-batch", "query": "authentication", "_type": "sparse-concept"}
+  ]
+}
