@@ -189,7 +189,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     elif git_dir:
         checks.append(("Repo root", "WARN", ".git found but repos.yaml missing"))
     else:
-        checks.append(("Repo root", "FAIL", "No repos.yaml found — run from project root"))
+        checks.append((
+            "Repo root", "FAIL",
+            "No repos.yaml found — run from project root",
+        ))
 
     # --- Check 2: Ripgrep ---
     rg_path = shutil.which("rg")
@@ -203,7 +206,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             )
             checks.append(("Ripgrep", "PASS", f"{version_line}"))
         except Exception:
-            checks.append(("Ripgrep", "WARN", f"Found at {rg_path}, version check failed"))
+            checks.append((
+                "Ripgrep", "WARN",
+                f"Found at {rg_path}, version check failed",
+            ))
     else:
         checks.append(("Ripgrep", "FAIL", "rg not found in PATH — install ripgrep"))
 
@@ -245,7 +251,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         http.get("/v1/status", timeout=5)
         checks.append(("Gateway", "PASS", f"Reachable at {gw}"))
     except SystemExit:
-        checks.append(("Gateway", "WARN", "Not reachable (CLAUDE_TOOLSTACK_API_KEY not set or gateway down)"))
+        checks.append((
+            "Gateway", "WARN",
+            "Not reachable (API key not set or gateway down)",
+        ))
     except Exception as e:
         checks.append(("Gateway", "WARN", f"Connection error: {e}"))
 
@@ -265,16 +274,24 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                     store.close()
                     label = f"Semantic [{entry}]"
                     last = status.get("last_indexed_at", "never")
-                    checks.append((
-                        label,
-                        "PASS",
-                        f"{status['chunks']} chunks, {status['embeddings']} embeddings, "
-                        f"model={status.get('model', '?')}, last={last}",
-                    ))
+                    msg = (
+                        f"{status['chunks']} chunks, "
+                        f"{status['embeddings']} embeddings, "
+                        f"model={status.get('model', '?')}, "
+                        f"last={last}"
+                    )
+                    checks.append((label, "PASS", msg))
                 except Exception as e:
-                    checks.append((f"Semantic [{entry}]", "WARN", f"Error reading: {e}"))
+                    checks.append((
+                        f"Semantic [{entry}]",
+                        "WARN",
+                        f"Error reading: {e}",
+                    ))
     if not store_found:
-        checks.append(("Semantic stores", "WARN", "No indexed repos found in gw-cache/"))
+        checks.append((
+            "Semantic stores", "WARN",
+            "No indexed repos found in gw-cache/",
+        ))
 
     # --- Output ---
     if fmt == "json":
@@ -446,7 +463,7 @@ def cmd_perf(args: argparse.Namespace) -> None:
             )
             if k["tip"]:
                 print(f"    {'':>{max_name}}    {k['tip']}")
-        print(f"\n  * = set via environment variable")
+        print("\n  * = set via environment variable")
 
 
 def cmd_search(args: argparse.Namespace) -> None:
