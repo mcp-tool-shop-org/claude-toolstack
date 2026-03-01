@@ -100,13 +100,9 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     # Semantic augmentation metrics (Phase 4)
     semantic_runs = [r for r in records if r.get("semantic_invoked", False)]
-    semantic_action_runs = [
-        r for r in records if r.get("semantic_action_fired", False)
-    ]
+    semantic_action_runs = [r for r in records if r.get("semantic_action_fired", False)]
     semantic_lifts = [
-        r["semantic_lift"]
-        for r in records
-        if r.get("semantic_lift") is not None
+        r["semantic_lift"] for r in records if r.get("semantic_lift") is not None
     ]
 
     return {

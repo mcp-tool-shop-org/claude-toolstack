@@ -251,9 +251,7 @@ def cmd_search(args: argparse.Namespace) -> None:
                 }
 
                 # Semantic fallback gate (opt-in via env var)
-                sem_flag = os.environ.get(
-                    "CTS_SEMANTIC_ENABLED", ""
-                ).lower()
+                sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
                 if sem_flag in ("1", "true"):
                     sem_db = _default_db_path(args.repo)
                     if os.path.exists(sem_db):

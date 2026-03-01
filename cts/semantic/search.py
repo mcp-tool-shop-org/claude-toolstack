@@ -220,9 +220,7 @@ def narrowed_search(
 
     # Load embeddings with optional path filter
     paths = allowed_paths or []
-    candidates, capped = store.get_embeddings_filtered(
-        paths, max_chunks=max_chunks
-    )
+    candidates, capped = store.get_embeddings_filtered(paths, max_chunks=max_chunks)
 
     debug["candidate_chunks_considered"] = len(candidates)
     debug["candidate_chunks_capped"] = capped
@@ -247,9 +245,7 @@ def narrowed_search(
             return NarrowedSearchResult(hits=[], debug=debug)
 
     # Run search
-    hits = cosine_search_numpy(
-        query_vec, candidates, dim, topk=topk
-    )
+    hits = cosine_search_numpy(query_vec, candidates, dim, topk=topk)
 
     debug["search_time_ms"] = round((time.time() - start_time) * 1000, 1)
 

@@ -230,9 +230,7 @@ def create_semantic_experiment(
         id = f"exp-semantic-{uuid.uuid4().hex[:8]}"
 
     if not description:
-        description = (
-            "Compare lexical-only (A) vs lexical + semantic_fallback (B)"
-        )
+        description = "Compare lexical-only (A) vs lexical + semantic_fallback (B)"
 
     if not hypothesis:
         hypothesis = (

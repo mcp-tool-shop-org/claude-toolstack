@@ -72,24 +72,14 @@ def _apply_path_filters(
 
     if avoid_paths:
         before = len(result)
-        result = [
-            p
-            for p in result
-            if not any(avoid in p for avoid in avoid_paths)
-        ]
+        result = [p for p in result if not any(avoid in p for avoid in avoid_paths)]
         if len(result) < before:
             rules_hit.append(f"avoid_paths removed {before - len(result)}")
 
     if prefer_paths:
-        preferred = [
-            p
-            for p in result
-            if any(pref in p for pref in prefer_paths)
-        ]
+        preferred = [p for p in result if any(pref in p for pref in prefer_paths)]
         if preferred:
-            rules_hit.append(
-                f"prefer_paths kept {len(preferred)} of {len(result)}"
-            )
+            rules_hit.append(f"prefer_paths kept {len(preferred)} of {len(result)}")
             result = preferred
 
     return result

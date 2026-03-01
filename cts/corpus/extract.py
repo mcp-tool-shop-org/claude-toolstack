@@ -268,18 +268,10 @@ def extract_record(
         cand_data = semantic_data.get("candidate_selection")
 
     if isinstance(cand_data, dict):
-        semantic_candidate_strategy = str(
-            cand_data.get("strategy", "")
-        )
-        semantic_candidate_files = int(
-            cand_data.get("candidate_files", 0)
-        )
-        semantic_candidate_chunks = int(
-            cand_data.get("candidate_chunks_considered", 0)
-        )
-        semantic_candidate_fallback_used = bool(
-            cand_data.get("fallback_used", False)
-        )
+        semantic_candidate_strategy = str(cand_data.get("strategy", ""))
+        semantic_candidate_files = int(cand_data.get("candidate_files", 0))
+        semantic_candidate_chunks = int(cand_data.get("candidate_chunks_considered", 0))
+        semantic_candidate_fallback_used = bool(cand_data.get("fallback_used", False))
 
     return CorpusRecord(
         schema_version=schema_version,

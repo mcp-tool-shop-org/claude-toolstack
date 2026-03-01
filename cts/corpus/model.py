@@ -85,9 +85,7 @@ class CorpusRecord:
             "semantic_candidate_strategy": self.semantic_candidate_strategy,
             "semantic_candidate_files": self.semantic_candidate_files,
             "semantic_candidate_chunks": self.semantic_candidate_chunks,
-            "semantic_candidate_fallback_used": (
-                self.semantic_candidate_fallback_used
-            ),
+            "semantic_candidate_fallback_used": (self.semantic_candidate_fallback_used),
         }
 
 
