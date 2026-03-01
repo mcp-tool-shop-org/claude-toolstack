@@ -8,6 +8,7 @@ Generic actions (all modes):
   - add_slices: fetch more context slices
   - try_symbol: look up the query as a symbol via ctags
   - broaden_glob: remove restrictive path globs
+  - semantic_fallback: augment with semantic search hits
 
 Mode-specific actions:
   - force_trace_slices: (error) ensure slices cover trace locations
@@ -122,6 +123,13 @@ def _action_focus_changed_files(
     }
 
 
+def _action_semantic_fallback() -> Dict[str, Any]:
+    return {
+        "name": "semantic_fallback",
+        "description": "Augment bundle with semantic search hits from local embeddings",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
@@ -233,6 +241,29 @@ def plan_refinements(
         a = _action_broaden_glob()
         a["trigger_reason"] = (
             f"pass {pass_number}, only {len(sources)} source(s) with globs"
+        )
+        actions.append(a)
+
+    # Priority 5: Semantic fallback — only when justified
+    # Trigger: low confidence + sparse matches + no structural wins
+    # + semantic store available + not already tried
+    already_tried = any(a["name"] == "semantic_fallback" for a in actions)
+    semantic_available = params.get("semantic_store_path") is not None
+    semantic_already_ran = params.get("_semantic_invoked", False)
+
+    if (
+        not already_tried
+        and semantic_available
+        and not semantic_already_ran
+        and len(sources) < 5
+        and def_found == 0.0
+        and conf["score"] < 0.5
+    ):
+        a = _action_semantic_fallback()
+        a["trigger_reason"] = (
+            f"confidence={conf['score']:.2f} < 0.5, "
+            f"only {len(sources)} source(s), "
+            f"no definition found — trying semantic"
         )
         actions.append(a)
 
@@ -427,6 +458,12 @@ def apply_refinement(
         current_cap = new_params.get("ident_cap", 20)
         new_params["ident_cap"] = min(current_cap + 10, 50)
 
+    elif name == "semantic_fallback":
+        # Enable semantic augmentation for the next build pass.
+        # The builder should: embed the query, search the semantic
+        # store, and merge high-scoring chunk paths into the bundle.
+        new_params["_semantic_invoked"] = True
+
     # try_symbol doesn't change search params — it triggers a
     # separate ctags lookup in execute_refinements
 
@@ -519,6 +556,7 @@ def execute_refinements(
                 record["changed_targets_count"] = len(targets)
             elif a["name"] == "expand_diff_idents":
                 record["ident_count"] = a.get("ident_count", 0)
+            # semantic_fallback: no extra metadata beyond trigger_reason
             action_records.append(record)
 
         pass_record: Dict[str, Any] = {

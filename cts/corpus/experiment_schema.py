@@ -38,6 +38,13 @@ DEFAULT_KPIS = [
     "should_autopilot_count",
 ]
 
+# Extended KPIs including semantic augmentation (Phase 4)
+SEMANTIC_KPIS = DEFAULT_KPIS + [
+    "semantic_invoked_rate",
+    "semantic_action_rate",
+    "semantic_lift_mean",
+]
+
 
 @dataclass
 class VariantSpec:
@@ -192,6 +199,76 @@ def create_experiment(
         decision_rule=DecisionRule(
             primary_kpi=primary_kpi,
             constraints=parsed_constraints,
+        ),
+    )
+
+
+def create_semantic_experiment(
+    *,
+    id: str = "",
+    description: str = "",
+    hypothesis: str = "",
+    assignment_mode: str = "manual",
+) -> ExperimentEnvelope:
+    """Create a Phase 4 semantic A/B experiment.
+
+    Template: A = lexical-only baseline, B = lexical + semantic_fallback.
+
+    Uses SEMANTIC_KPIS (includes semantic_lift_mean) and applies
+    a constraint to prevent truncation regression.
+
+    Args:
+        id: Experiment ID (auto-generated if empty).
+        description: What the experiment tests.
+        hypothesis: Expected outcome.
+        assignment_mode: How to assign runs.
+
+    Returns:
+        A fully-specified ExperimentEnvelope for semantic comparison.
+    """
+    if not id:
+        id = f"exp-semantic-{uuid.uuid4().hex[:8]}"
+
+    if not description:
+        description = (
+            "Compare lexical-only (A) vs lexical + semantic_fallback (B)"
+        )
+
+    if not hypothesis:
+        hypothesis = (
+            "Semantic fallback improves confidence_final_mean "
+            "when lexical search produces sparse matches"
+        )
+
+    variants = [
+        VariantSpec(
+            name="A",
+            expected_effects=["Baseline: lexical search only"],
+        ),
+        VariantSpec(
+            name="B",
+            expected_effects=[
+                "semantic_fallback action enabled in autopilot",
+                "Expected: higher confidence when matches are sparse",
+            ],
+        ),
+    ]
+
+    return ExperimentEnvelope(
+        id=id,
+        created_at=time.time(),
+        description=description,
+        hypothesis=hypothesis,
+        kpis=list(SEMANTIC_KPIS),
+        variants=variants,
+        assignment=AssignmentSpec(mode=assignment_mode),
+        decision_rule=DecisionRule(
+            primary_kpi="confidence_final_mean",
+            constraints=[
+                {"kpi": "truncation_rate", "operator": "<=", "threshold": 0.02},
+                {"kpi": "bundle_bytes_p90", "operator": "<=", "threshold": 5000},
+            ],
+            tie_breakers=["semantic_lift_mean", "confidence_delta_mean"],
         ),
     )
 

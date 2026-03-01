@@ -207,6 +207,53 @@ def extract_record(
         # _debug present but no timings sub-key
         missing.append("timings")
 
+    # --- Semantic augmentation (Phase 4) ---
+    semantic_invoked = False
+    semantic_time_ms: Optional[float] = None
+    semantic_hit_count = 0
+    semantic_action_fired = False
+    semantic_lift: Optional[float] = None
+
+    # Check for semantic data in _debug.semantic or final.semantic
+    semantic_data = None
+    if isinstance(debug_data, dict):
+        semantic_data = debug_data.get("semantic")
+    if semantic_data is None and final:
+        semantic_data = final.get("semantic")
+
+    if isinstance(semantic_data, dict):
+        semantic_invoked = bool(semantic_data.get("invoked", False))
+        st = semantic_data.get("time_ms")
+        if isinstance(st, (int, float)):
+            semantic_time_ms = float(st)
+        semantic_hit_count = int(semantic_data.get("hit_count", 0))
+
+    # Check if autopilot fired the semantic_fallback action
+    for a in actions:
+        if a.get("name") == "semantic_fallback":
+            semantic_action_fired = True
+            break
+
+    # Compute semantic lift: confidence delta attributable to the pass
+    # that included semantic_fallback
+    if semantic_action_fired and passes:
+        for idx, p in enumerate(passes):
+            p_actions = p.get("actions", [])
+            if "semantic_fallback" in p_actions:
+                conf_before = p.get("confidence_before")
+                # Use next pass's confidence_before, or final confidence
+                if idx + 1 < len(passes):
+                    conf_after = passes[idx + 1].get("confidence_before")
+                elif confidence_final is not None:
+                    conf_after = confidence_final
+                else:
+                    conf_after = None
+                if isinstance(conf_before, (int, float)) and isinstance(
+                    conf_after, (int, float)
+                ):
+                    semantic_lift = round(conf_after - conf_before, 4)
+                break
+
     return CorpusRecord(
         schema_version=schema_version,
         repo=repo,
@@ -224,6 +271,11 @@ def extract_record(
         truncation_flags=truncation_flags,
         timings_ms=timings_ms,
         missing_fields=missing,
+        semantic_invoked=semantic_invoked,
+        semantic_time_ms=semantic_time_ms,
+        semantic_hit_count=semantic_hit_count,
+        semantic_action_fired=semantic_action_fired,
+        semantic_lift=semantic_lift,
     )
 
 

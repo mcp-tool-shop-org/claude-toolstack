@@ -45,6 +45,13 @@ class CorpusRecord:
     # Quality metadata
     missing_fields: List[str] = field(default_factory=list)
 
+    # Semantic augmentation metrics (Phase 4)
+    semantic_invoked: bool = False
+    semantic_time_ms: Optional[float] = None
+    semantic_hit_count: int = 0
+    semantic_action_fired: bool = False
+    semantic_lift: Optional[float] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a JSON-serializable dict for JSONL output."""
         return {
@@ -64,6 +71,11 @@ class CorpusRecord:
             "truncation_flags": self.truncation_flags,
             "timings_ms": self.timings_ms,
             "missing_fields": self.missing_fields,
+            "semantic_invoked": self.semantic_invoked,
+            "semantic_time_ms": self.semantic_time_ms,
+            "semantic_hit_count": self.semantic_hit_count,
+            "semantic_action_fired": self.semantic_action_fired,
+            "semantic_lift": self.semantic_lift,
         }
 
 

@@ -98,6 +98,17 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     autopilot_count = len(autopilot_runs)
 
+    # Semantic augmentation metrics (Phase 4)
+    semantic_runs = [r for r in records if r.get("semantic_invoked", False)]
+    semantic_action_runs = [
+        r for r in records if r.get("semantic_action_fired", False)
+    ]
+    semantic_lifts = [
+        r["semantic_lift"]
+        for r in records
+        if r.get("semantic_lift") is not None
+    ]
+
     return {
         "total": total,
         "confidence_final_mean": round(_mean(finals), 4),
@@ -110,6 +121,14 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "should_autopilot_count": len(should_auto),
         "autopilot_runs": autopilot_count,
         "truncated_count": truncated,
+        # Semantic KPIs
+        "semantic_invoked_rate": (
+            round(len(semantic_runs) / total, 4) if total else 0.0
+        ),
+        "semantic_action_rate": (
+            round(len(semantic_action_runs) / total, 4) if total else 0.0
+        ),
+        "semantic_lift_mean": round(_mean(semantic_lifts), 4),
     }
 
 
@@ -118,7 +137,11 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 # KPIs where higher is better
-_HIGHER_BETTER = {"confidence_final_mean", "confidence_delta_mean"}
+_HIGHER_BETTER = {
+    "confidence_final_mean",
+    "confidence_delta_mean",
+    "semantic_lift_mean",
+}
 
 # KPIs where lower is better
 _LOWER_BETTER = {
@@ -126,6 +149,12 @@ _LOWER_BETTER = {
     "autopilot_low_lift_rate",
     "bundle_bytes_p90",
     "should_autopilot_count",
+}
+
+# Informational KPIs (tracked but not used for verdict direction)
+_INFORMATIONAL = {
+    "semantic_invoked_rate",
+    "semantic_action_rate",
 }
 
 # Minimum absolute change to count as a real delta (avoid noise)
@@ -136,6 +165,7 @@ _NOISE_THRESHOLDS: Dict[str, float] = {
     "autopilot_low_lift_rate": 0.02,
     "bundle_bytes_p90": 1024,
     "should_autopilot_count": 1,
+    "semantic_lift_mean": 0.01,
 }
 
 

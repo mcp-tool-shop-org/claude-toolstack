@@ -31,7 +31,11 @@ from cts.corpus.evaluate import extract_kpis
 # ---------------------------------------------------------------------------
 
 # KPI direction maps (higher = better or lower = better)
-_HIGHER_BETTER = {"confidence_final_mean", "confidence_delta_mean"}
+_HIGHER_BETTER = {
+    "confidence_final_mean",
+    "confidence_delta_mean",
+    "semantic_lift_mean",
+}
 _LOWER_BETTER = {
     "truncation_rate",
     "autopilot_low_lift_rate",
@@ -47,6 +51,7 @@ _NOISE: Dict[str, float] = {
     "autopilot_low_lift_rate": 0.05,
     "bundle_bytes_p90": 5000,
     "should_autopilot_count": 1,
+    "semantic_lift_mean": 0.01,
 }
 
 

@@ -685,6 +685,12 @@ class TestCorpusSecurityGuardrails(unittest.TestCase):
             "truncation_flags",
             "timings_ms",
             "missing_fields",
+            # Semantic augmentation (Phase 4)
+            "semantic_invoked",
+            "semantic_time_ms",
+            "semantic_hit_count",
+            "semantic_action_fired",
+            "semantic_lift",
         }
         self.assertEqual(set(d.keys()), allowed_keys)
 
