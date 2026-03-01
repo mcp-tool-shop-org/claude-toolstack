@@ -2,14 +2,18 @@
 
 No FAISS, no external index — just numpy dot products.
 Designed for workstation-scale corpora (<50K chunks).
+
+Candidate narrowing (Phase 4.2):
+  narrowed_search() integrates candidate selection, filtered
+  store retrieval, and fallback logic into a single call.
 """
 
 from __future__ import annotations
 
 import struct
 import time
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -147,3 +151,106 @@ def cosine_search_numpy(
         )
         for i in top_indices
     ]
+
+
+# ---------------------------------------------------------------------------
+# Narrowed search (Phase 4.2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NarrowedSearchResult:
+    """Result of a narrowed semantic search with full debug metadata."""
+
+    hits: List[SearchHit]
+    debug: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "hits": [
+                {
+                    "chunk_id": h.chunk_id,
+                    "path": h.path,
+                    "start_line": h.start_line,
+                    "end_line": h.end_line,
+                    "score": h.score,
+                }
+                for h in self.hits
+            ],
+            "debug": self.debug,
+        }
+
+
+def narrowed_search(
+    query_vec: bytes,
+    store: Any,  # SemanticStore — avoid circular import
+    dim: int,
+    *,
+    allowed_paths: Optional[List[str]] = None,
+    max_chunks: int = 0,
+    topk: int = 8,
+    max_seconds: float = 4.0,
+    fallback: str = "global_tight",
+    fallback_topk: int = 5,
+    candidate_debug: Optional[Dict[str, Any]] = None,
+) -> NarrowedSearchResult:
+    """Search with candidate narrowing and fallback.
+
+    Args:
+        query_vec: Serialized float32 query embedding.
+        store: SemanticStore instance.
+        dim: Embedding dimension.
+        allowed_paths: File paths to search (empty/None = all).
+        max_chunks: Maximum candidate chunks to load (0 = unlimited).
+        topk: Number of top results to return.
+        max_seconds: Time budget for search.
+        fallback: What to do when candidate pool is empty
+            ("global_tight" = search all with tighter topk, "skip" = no results).
+        fallback_topk: topK to use for global_tight fallback.
+        candidate_debug: Debug metadata from candidate selector.
+
+    Returns:
+        NarrowedSearchResult with hits and debug metadata.
+    """
+    debug: Dict[str, Any] = {}
+    if candidate_debug:
+        debug["candidate_selection"] = candidate_debug
+
+    start_time = time.time()
+
+    # Load embeddings with optional path filter
+    paths = allowed_paths or []
+    candidates, capped = store.get_embeddings_filtered(
+        paths, max_chunks=max_chunks
+    )
+
+    debug["candidate_chunks_considered"] = len(candidates)
+    debug["candidate_chunks_capped"] = capped
+    debug["fallback_used"] = False
+
+    # Check if candidate pool is empty
+    if not candidates and paths:
+        # No candidates from narrowing — apply fallback
+        if fallback == "global_tight":
+            debug["fallback_used"] = True
+            debug["fallback_strategy"] = "global_tight"
+            debug["fallback_topk"] = fallback_topk
+            candidates, capped = store.get_embeddings_filtered(
+                [], max_chunks=max_chunks
+            )
+            debug["fallback_chunks_loaded"] = len(candidates)
+            topk = fallback_topk
+        else:
+            # fallback == "skip"
+            debug["fallback_used"] = True
+            debug["fallback_strategy"] = "skip"
+            return NarrowedSearchResult(hits=[], debug=debug)
+
+    # Run search
+    hits = cosine_search_numpy(
+        query_vec, candidates, dim, topk=topk
+    )
+
+    debug["search_time_ms"] = round((time.time() - start_time) * 1000, 1)
+
+    return NarrowedSearchResult(hits=hits, debug=debug)

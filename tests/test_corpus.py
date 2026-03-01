@@ -691,6 +691,11 @@ class TestCorpusSecurityGuardrails(unittest.TestCase):
             "semantic_hit_count",
             "semantic_action_fired",
             "semantic_lift",
+            # Candidate narrowing (Phase 4.2)
+            "semantic_candidate_strategy",
+            "semantic_candidate_files",
+            "semantic_candidate_chunks",
+            "semantic_candidate_fallback_used",
         }
         self.assertEqual(set(d.keys()), allowed_keys)
 

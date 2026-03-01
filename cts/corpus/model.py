@@ -52,6 +52,12 @@ class CorpusRecord:
     semantic_action_fired: bool = False
     semantic_lift: Optional[float] = None
 
+    # Candidate narrowing metrics (Phase 4.2)
+    semantic_candidate_strategy: str = ""
+    semantic_candidate_files: int = 0
+    semantic_candidate_chunks: int = 0
+    semantic_candidate_fallback_used: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a JSON-serializable dict for JSONL output."""
         return {
@@ -76,6 +82,12 @@ class CorpusRecord:
             "semantic_hit_count": self.semantic_hit_count,
             "semantic_action_fired": self.semantic_action_fired,
             "semantic_lift": self.semantic_lift,
+            "semantic_candidate_strategy": self.semantic_candidate_strategy,
+            "semantic_candidate_files": self.semantic_candidate_files,
+            "semantic_candidate_chunks": self.semantic_candidate_chunks,
+            "semantic_candidate_fallback_used": (
+                self.semantic_candidate_fallback_used
+            ),
         }
 
 

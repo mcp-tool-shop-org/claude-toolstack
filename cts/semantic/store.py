@@ -258,6 +258,59 @@ class SemanticStore:
         ).fetchall()
         return rows
 
+    def get_embeddings_filtered(
+        self,
+        allowed_paths: List[str],
+        *,
+        max_chunks: int = 0,
+    ) -> Tuple[List[Tuple[str, str, int, int, bytes]], bool]:
+        """Get embeddings for allowed paths with batch-safe querying.
+
+        Handles large path lists by batching IN clauses to stay
+        within SQLite's parameter limits.  Enforces a chunk cap
+        to bound memory and compute.
+
+        Args:
+            allowed_paths: File paths to include (empty = all).
+            max_chunks: Maximum chunks to return (0 = unlimited).
+
+        Returns:
+            Tuple of (rows, capped).
+            rows: list of (chunk_id, path, start_line, end_line, vec_blob).
+            capped: True if max_chunks was hit before all rows loaded.
+        """
+        if not allowed_paths:
+            # No filter — return all (or up to cap)
+            rows = self.get_all_embeddings()
+            if max_chunks > 0 and len(rows) > max_chunks:
+                return rows[:max_chunks], True
+            return rows, False
+
+        # Batch paths in groups of 500 to avoid SQLite param limits
+        batch_size = 500
+        all_rows: List[Tuple[str, str, int, int, bytes]] = []
+        capped = False
+
+        for i in range(0, len(allowed_paths), batch_size):
+            batch = allowed_paths[i : i + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._conn.execute(
+                f"""SELECT c.chunk_id, c.path, c.start_line,
+                           c.end_line, e.vec
+                    FROM embeddings e
+                    JOIN chunks c ON c.chunk_id = e.chunk_id
+                    WHERE c.path IN ({placeholders})""",
+                batch,
+            ).fetchall()
+            all_rows.extend(rows)
+
+            if max_chunks > 0 and len(all_rows) >= max_chunks:
+                all_rows = all_rows[:max_chunks]
+                capped = True
+                break
+
+        return all_rows, capped
+
     # -----------------------------------------------------------------------
     # Maintenance
     # -----------------------------------------------------------------------

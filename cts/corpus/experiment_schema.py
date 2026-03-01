@@ -273,6 +273,83 @@ def create_semantic_experiment(
     )
 
 
+def create_narrowing_experiment(
+    *,
+    id: str = "",
+    description: str = "",
+    hypothesis: str = "",
+    assignment_mode: str = "manual",
+) -> ExperimentEnvelope:
+    """Create a Phase 4.2 narrowing A/B experiment.
+
+    Template: A = semantic_fallback (baseline), B = semantic_fallback
+    + candidate narrowing (exclude_top_k).
+
+    Primary KPI is semantic_lift_mean — we want to verify narrowing
+    preserves lift while reducing latency.
+
+    Args:
+        id: Experiment ID (auto-generated if empty).
+        description: What the experiment tests.
+        hypothesis: Expected outcome.
+        assignment_mode: How to assign runs.
+
+    Returns:
+        A fully-specified ExperimentEnvelope for narrowing comparison.
+    """
+    if not id:
+        id = f"exp-narrowing-{uuid.uuid4().hex[:8]}"
+
+    if not description:
+        description = (
+            "Compare semantic_fallback without narrowing (A) "
+            "vs semantic_fallback with exclude_top_k narrowing (B)"
+        )
+
+    if not hypothesis:
+        hypothesis = (
+            "Candidate narrowing reduces semantic_time_ms p90 "
+            "without materially reducing semantic_lift_mean"
+        )
+
+    variants = [
+        VariantSpec(
+            name="A",
+            expected_effects=[
+                "Baseline: semantic_fallback searches all chunks",
+            ],
+        ),
+        VariantSpec(
+            name="B",
+            expected_effects=[
+                "exclude_top_k=10 narrowing enabled",
+                "Expected: lower latency, comparable lift",
+            ],
+        ),
+    ]
+
+    return ExperimentEnvelope(
+        id=id,
+        created_at=time.time(),
+        description=description,
+        hypothesis=hypothesis,
+        kpis=list(SEMANTIC_KPIS),
+        variants=variants,
+        assignment=AssignmentSpec(mode=assignment_mode),
+        decision_rule=DecisionRule(
+            primary_kpi="semantic_lift_mean",
+            constraints=[
+                {
+                    "kpi": "truncation_rate",
+                    "operator": "<=",
+                    "threshold": 0.02,
+                },
+            ],
+            tie_breakers=["confidence_final_mean", "confidence_delta_mean"],
+        ),
+    )
+
+
 def validate_experiment(data: Dict[str, Any]) -> List[str]:
     """Validate an experiment envelope dict.
 

@@ -254,6 +254,33 @@ def extract_record(
                     semantic_lift = round(conf_after - conf_before, 4)
                 break
 
+    # --- Candidate narrowing (Phase 4.2) ---
+    semantic_candidate_strategy = ""
+    semantic_candidate_files = 0
+    semantic_candidate_chunks = 0
+    semantic_candidate_fallback_used = False
+
+    # Look in _debug.semantic_candidates or _debug.semantic.candidate_selection
+    cand_data = None
+    if isinstance(debug_data, dict):
+        cand_data = debug_data.get("semantic_candidates")
+    if cand_data is None and isinstance(semantic_data, dict):
+        cand_data = semantic_data.get("candidate_selection")
+
+    if isinstance(cand_data, dict):
+        semantic_candidate_strategy = str(
+            cand_data.get("strategy", "")
+        )
+        semantic_candidate_files = int(
+            cand_data.get("candidate_files", 0)
+        )
+        semantic_candidate_chunks = int(
+            cand_data.get("candidate_chunks_considered", 0)
+        )
+        semantic_candidate_fallback_used = bool(
+            cand_data.get("fallback_used", False)
+        )
+
     return CorpusRecord(
         schema_version=schema_version,
         repo=repo,
@@ -276,6 +303,10 @@ def extract_record(
         semantic_hit_count=semantic_hit_count,
         semantic_action_fired=semantic_action_fired,
         semantic_lift=semantic_lift,
+        semantic_candidate_strategy=semantic_candidate_strategy,
+        semantic_candidate_files=semantic_candidate_files,
+        semantic_candidate_chunks=semantic_candidate_chunks,
+        semantic_candidate_fallback_used=semantic_candidate_fallback_used,
     )
 
 

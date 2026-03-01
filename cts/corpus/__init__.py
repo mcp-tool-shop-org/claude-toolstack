@@ -27,6 +27,7 @@ from cts.corpus.experiment_schema import (
     ExperimentEnvelope,
     VariantSpec,
     create_experiment,
+    create_narrowing_experiment,
     create_semantic_experiment,
     validate_experiment,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "ExperimentEnvelope",
     "VariantSpec",
     "create_experiment",
+    "create_narrowing_experiment",
     "create_semantic_experiment",
     "validate_experiment",
     "TuningEnvelope",

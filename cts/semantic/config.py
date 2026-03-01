@@ -54,6 +54,13 @@ class SemanticConfig:
         ]
     )
 
+    # Candidate narrowing (Phase 4.2, default off)
+    candidate_strategy: str = "none"  # none | exclude_top_k
+    candidate_exclude_top_k: int = 10
+    candidate_max_files: int = 200
+    candidate_max_chunks: int = 20000
+    candidate_fallback: str = "global_tight"  # global_tight | skip
+
 
 def load_config(**overrides: object) -> SemanticConfig:
     """Load semantic config from environment + overrides.
@@ -70,6 +77,11 @@ def load_config(**overrides: object) -> SemanticConfig:
       CTS_SEMANTIC_MODEL
       CTS_SEMANTIC_DEVICE
       CTS_SEMANTIC_STORE_DIR
+      CTS_SEMANTIC_CANDIDATE_STRATEGY
+      CTS_SEMANTIC_CANDIDATE_EXCLUDE_TOP_K
+      CTS_SEMANTIC_CANDIDATE_MAX_FILES
+      CTS_SEMANTIC_CANDIDATE_MAX_CHUNKS
+      CTS_SEMANTIC_CANDIDATE_FALLBACK
     """
     cfg = SemanticConfig()
 
@@ -85,6 +97,14 @@ def load_config(**overrides: object) -> SemanticConfig:
         "CTS_SEMANTIC_MODEL": ("model_name", str),
         "CTS_SEMANTIC_DEVICE": ("device", str),
         "CTS_SEMANTIC_STORE_DIR": ("store_dir", str),
+        "CTS_SEMANTIC_CANDIDATE_STRATEGY": ("candidate_strategy", str),
+        "CTS_SEMANTIC_CANDIDATE_EXCLUDE_TOP_K": (
+            "candidate_exclude_top_k",
+            int,
+        ),
+        "CTS_SEMANTIC_CANDIDATE_MAX_FILES": ("candidate_max_files", int),
+        "CTS_SEMANTIC_CANDIDATE_MAX_CHUNKS": ("candidate_max_chunks", int),
+        "CTS_SEMANTIC_CANDIDATE_FALLBACK": ("candidate_fallback", str),
     }
 
     for env_var, (attr, conv) in env_map.items():
