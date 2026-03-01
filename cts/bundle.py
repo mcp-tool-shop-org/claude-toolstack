@@ -386,10 +386,7 @@ def semantic_retrieve_and_slice(
         # Candidate narrowing: decide which files to search
         use_narrowed = False
         allowed_paths: List[str] = []
-        if (
-            ranked_sources
-            and candidate_strategy != "none"
-        ):
+        if ranked_sources and candidate_strategy != "none":
             from cts.semantic.candidates import select_candidates
 
             selection = select_candidates(

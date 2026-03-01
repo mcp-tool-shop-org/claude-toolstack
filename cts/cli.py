@@ -189,10 +189,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     elif git_dir:
         checks.append(("Repo root", "WARN", ".git found but repos.yaml missing"))
     else:
-        checks.append((
-            "Repo root", "FAIL",
-            "No repos.yaml found — run from project root",
-        ))
+        checks.append(
+            (
+                "Repo root",
+                "FAIL",
+                "No repos.yaml found — run from project root",
+            )
+        )
 
     # --- Check 2: Ripgrep ---
     rg_path = shutil.which("rg")
@@ -206,10 +209,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             )
             checks.append(("Ripgrep", "PASS", f"{version_line}"))
         except Exception:
-            checks.append((
-                "Ripgrep", "WARN",
-                f"Found at {rg_path}, version check failed",
-            ))
+            checks.append(
+                (
+                    "Ripgrep",
+                    "WARN",
+                    f"Found at {rg_path}, version check failed",
+                )
+            )
     else:
         checks.append(("Ripgrep", "FAIL", "rg not found in PATH — install ripgrep"))
 
@@ -231,17 +237,21 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     try:
         import sentence_transformers
 
-        checks.append((
-            "sentence-transformers",
-            "PASS",
-            f"v{sentence_transformers.__version__}",
-        ))
+        checks.append(
+            (
+                "sentence-transformers",
+                "PASS",
+                f"v{sentence_transformers.__version__}",
+            )
+        )
     except ImportError:
-        checks.append((
-            "sentence-transformers",
-            "WARN",
-            "Not installed (needed for semantic search)",
-        ))
+        checks.append(
+            (
+                "sentence-transformers",
+                "WARN",
+                "Not installed (needed for semantic search)",
+            )
+        )
 
     # --- Check 5: Gateway ---
     try:
@@ -251,10 +261,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         http.get("/v1/status", timeout=5)
         checks.append(("Gateway", "PASS", f"Reachable at {gw}"))
     except SystemExit:
-        checks.append((
-            "Gateway", "WARN",
-            "Not reachable (API key not set or gateway down)",
-        ))
+        checks.append(
+            (
+                "Gateway",
+                "WARN",
+                "Not reachable (API key not set or gateway down)",
+            )
+        )
     except Exception as e:
         checks.append(("Gateway", "WARN", f"Connection error: {e}"))
 
@@ -282,22 +295,25 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                     )
                     checks.append((label, "PASS", msg))
                 except Exception as e:
-                    checks.append((
-                        f"Semantic [{entry}]",
-                        "WARN",
-                        f"Error reading: {e}",
-                    ))
+                    checks.append(
+                        (
+                            f"Semantic [{entry}]",
+                            "WARN",
+                            f"Error reading: {e}",
+                        )
+                    )
     if not store_found:
-        checks.append((
-            "Semantic stores", "WARN",
-            "No indexed repos found in gw-cache/",
-        ))
+        checks.append(
+            (
+                "Semantic stores",
+                "WARN",
+                "No indexed repos found in gw-cache/",
+            )
+        )
 
     # --- Output ---
     if fmt == "json":
-        result = [
-            {"check": c[0], "status": c[1], "detail": c[2]} for c in checks
-        ]
+        result = [{"check": c[0], "status": c[1], "detail": c[2]} for c in checks]
         print(json.dumps(result, indent=2))
     else:
         for name, status, detail in checks:
@@ -333,14 +349,16 @@ def cmd_perf(args: argparse.Namespace) -> None:
         tip: str = "",
     ) -> None:
         source = "env" if os.environ.get(env_var) is not None else "default"
-        knobs.append({
-            "name": name,
-            "env_var": env_var,
-            "value": current,
-            "default": default,
-            "source": source,
-            "tip": tip,
-        })
+        knobs.append(
+            {
+                "name": name,
+                "env_var": env_var,
+                "value": current,
+                "default": default,
+                "source": source,
+                "tip": tip,
+            }
+        )
 
     # --- Semantic knobs ---
     sem_env = os.environ.get("CTS_SEMANTIC_ENABLED")
