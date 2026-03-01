@@ -36,6 +36,10 @@ from cts.corpus.patch import (
     render_plan_json,
     render_plan_text,
 )
+from cts.corpus.archive import (
+    archive_experiment,
+    validate_registry_entry,
+)
 from cts.corpus.experiment_eval import (
     assign_records,
     evaluate_experiment,
@@ -82,6 +86,8 @@ __all__ = [
     "validate_experiment",
     "TuningEnvelope",
     "TuningRecommendation",
+    "archive_experiment",
+    "validate_registry_entry",
     "assign_records",
     "evaluate_experiment",
     "pick_winner",

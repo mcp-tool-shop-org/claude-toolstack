@@ -20,6 +20,7 @@ Usage:
   cts corpus evaluate before.jsonl after.jsonl --format markdown
   cts corpus experiment init --id EXP1 --description "..." --out experiment.json
   cts corpus experiment propose --corpus tuning.json --repos-yaml repos.yaml
+  cts corpus experiment archive --experiment exp.json --result result.json
   cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
 
 Output modes: --json | --text (default) | --claude | --sidecar
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any, List, Optional
 
@@ -983,6 +985,8 @@ def _corpus_experiment(args: argparse.Namespace) -> None:
         _experiment_propose(args)
     elif exp_action == "evaluate":
         _experiment_evaluate(args)
+    elif exp_action == "archive":
+        _experiment_archive(args)
 
 
 def _experiment_init(args: argparse.Namespace) -> None:
@@ -1112,6 +1116,52 @@ def _experiment_propose(args: argparse.Namespace) -> None:
             f"{v['active_patches']} active patch(es)",
             file=sys.stderr,
         )
+
+
+def _experiment_archive(args: argparse.Namespace) -> None:
+    from cts.corpus.archive import archive_experiment
+
+    experiment_path: str = args.experiment
+    result_path: str | None = getattr(args, "result", None)
+    result_md_path: str | None = getattr(args, "result_md", None)
+    variant_dir: str | None = getattr(args, "variant_dir", None)
+    repos_yaml_path: str | None = getattr(args, "repos_yaml", None)
+    registry_root: str = getattr(args, "registry_root", "experiments")
+
+    # Validate experiment exists
+    if not os.path.exists(experiment_path):
+        print(
+            f"Error: file not found: {experiment_path}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    summary = archive_experiment(
+        experiment_path=experiment_path,
+        result_path=result_path,
+        result_md_path=result_md_path,
+        variant_dir=variant_dir,
+        repos_yaml_path=repos_yaml_path,
+        registry_root=registry_root,
+    )
+
+    status = summary["status"]
+    exp_id = summary["exp_id"]
+    if status == "already_archived":
+        print(
+            f"Already archived: {exp_id} ({summary['message']})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Archived: {exp_id} → {summary['exp_dir']}",
+            file=sys.stderr,
+        )
+        if summary.get("run_dir"):
+            print(
+                f"  Run: {summary['run_id']} → {summary['run_dir']}",
+                file=sys.stderr,
+            )
 
 
 def _experiment_evaluate(args: argparse.Namespace) -> None:
@@ -1534,6 +1584,43 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Strategy override: 'A=aggressive' (repeatable)",
+    )
+
+    # corpus experiment archive
+    p_ea = exp_sub.add_parser(
+        "archive",
+        help="Archive experiment run into the registry",
+    )
+    p_ea.add_argument(
+        "--experiment",
+        required=True,
+        help="Path to experiment envelope JSON",
+    )
+    p_ea.add_argument(
+        "--result",
+        default=None,
+        help="Path to result.json (optional)",
+    )
+    p_ea.add_argument(
+        "--result-md",
+        default=None,
+        help="Path to result.md (optional)",
+    )
+    p_ea.add_argument(
+        "--variant-dir",
+        default=None,
+        help="Directory with variant artifacts (tuning, diffs)",
+    )
+    p_ea.add_argument(
+        "--repos-yaml",
+        default=None,
+        help="Path to repos.yaml (optional, for hash tracking)",
+    )
+    p_ea.add_argument(
+        "--root",
+        dest="registry_root",
+        default="experiments",
+        help="Registry root directory (default: experiments/)",
     )
 
     # corpus experiment evaluate
