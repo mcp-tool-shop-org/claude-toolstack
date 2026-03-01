@@ -40,7 +40,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from cts import __version__
 from cts import bundle as bundle_mod
@@ -238,20 +238,37 @@ def cmd_search(args: argparse.Namespace) -> None:
             # Only refine if initial confidence is low
             initial_conf = bundle_confidence(b, score_cards=initial_cards)
             if not initial_conf["sufficient"]:
+                bk: Dict[str, Any] = {
+                    "search_data": data,
+                    "repo": args.repo,
+                    "request_id": data.get("_request_id"),
+                    "max_files": args.evidence_files,
+                    "context": args.context,
+                    "prefer_paths": prefer,
+                    "avoid_paths": avoid,
+                    "repo_root": repo_root,
+                    "explain_top": explain_top,
+                }
+
+                # Semantic fallback gate (opt-in via env var)
+                sem_flag = os.environ.get(
+                    "CTS_SEMANTIC_ENABLED", ""
+                ).lower()
+                if sem_flag in ("1", "true"):
+                    sem_db = _default_db_path(args.repo)
+                    if os.path.exists(sem_db):
+                        bk["semantic_store_path"] = sem_db
+                    else:
+                        print(
+                            f"semantic enabled but store missing "
+                            f"at {sem_db} — fallback disabled",
+                            file=sys.stderr,
+                        )
+
                 result = execute_refinements(
                     b,
                     build_fn=bundle_mod.build_default_bundle,
-                    build_kwargs={
-                        "search_data": data,
-                        "repo": args.repo,
-                        "request_id": data.get("_request_id"),
-                        "max_files": args.evidence_files,
-                        "context": args.context,
-                        "prefer_paths": prefer,
-                        "avoid_paths": avoid,
-                        "repo_root": repo_root,
-                        "explain_top": explain_top,
-                    },
+                    build_kwargs=bk,
                     max_passes=autopilot_n,
                     max_seconds=getattr(args, "autopilot_max_seconds", 30.0),
                     score_cards=initial_cards,

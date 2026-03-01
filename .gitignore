@@ -28,5 +28,11 @@ certs/
 *.log
 audit/
 
+# Experiment artifacts (Phase 4.1/4.2 A/B data)
+artifacts/
+
+# Semantic index stores
+gw-cache/
+
 # Polyglot cache
 .polyglot-cache.json

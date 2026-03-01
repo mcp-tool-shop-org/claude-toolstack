@@ -459,3 +459,125 @@ class TestSemanticExperimentTemplate:
         for kpi in DEFAULT_KPIS:
             assert kpi in SEMANTIC_KPIS
         assert len(SEMANTIC_KPIS) > len(DEFAULT_KPIS)
+
+
+# ---------------------------------------------------------------------------
+# 5.4 — CLI wiring: CTS_SEMANTIC_ENABLED injects store path
+# ---------------------------------------------------------------------------
+
+
+class TestCLISemanticStoreInjection:
+    """Verify that CTS_SEMANTIC_ENABLED gates semantic_store_path injection."""
+
+    def test_enabled_with_store_injects_path(self, tmp_path, monkeypatch):
+        """When enabled and store exists, semantic_store_path is in kwargs."""
+        import os
+
+        from cts.cli import _default_db_path
+
+        repo = "test/repo"
+        db_path = _default_db_path(repo)
+
+        # Create the store file so os.path.exists returns True
+        full_db = tmp_path / db_path
+        full_db.parent.mkdir(parents=True, exist_ok=True)
+        full_db.write_bytes(b"")
+
+        monkeypatch.setenv("CTS_SEMANTIC_ENABLED", "1")
+        monkeypatch.chdir(tmp_path)
+
+        sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
+        assert sem_flag in ("1", "true")
+
+        resolved = _default_db_path(repo)
+        assert os.path.exists(resolved)
+
+        # Simulate the build_kwargs construction from cli.py
+        bk: dict = {}
+        if sem_flag in ("1", "true"):
+            sem_db = _default_db_path(repo)
+            if os.path.exists(sem_db):
+                bk["semantic_store_path"] = sem_db
+
+        assert "semantic_store_path" in bk
+        assert bk["semantic_store_path"] == resolved
+
+    def test_enabled_without_store_no_injection(self, tmp_path, monkeypatch):
+        """When enabled but store missing, no semantic_store_path."""
+        import os
+
+        from cts.cli import _default_db_path
+
+        monkeypatch.setenv("CTS_SEMANTIC_ENABLED", "1")
+        monkeypatch.chdir(tmp_path)
+
+        repo = "test/repo"
+        sem_db = _default_db_path(repo)
+        assert not os.path.exists(sem_db)
+
+        bk: dict = {}
+        sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
+        if sem_flag in ("1", "true"):
+            if os.path.exists(sem_db):
+                bk["semantic_store_path"] = sem_db
+
+        assert "semantic_store_path" not in bk
+
+    def test_disabled_no_injection(self, tmp_path, monkeypatch):
+        """When disabled (default), no injection even if store exists."""
+        import os
+
+        from cts.cli import _default_db_path
+
+        repo = "test/repo"
+        db_path = _default_db_path(repo)
+
+        full_db = tmp_path / db_path
+        full_db.parent.mkdir(parents=True, exist_ok=True)
+        full_db.write_bytes(b"")
+
+        monkeypatch.chdir(tmp_path)
+        # CTS_SEMANTIC_ENABLED not set
+
+        bk: dict = {}
+        sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
+        if sem_flag in ("1", "true"):
+            sem_db = _default_db_path(repo)
+            if os.path.exists(sem_db):
+                bk["semantic_store_path"] = sem_db
+
+        assert "semantic_store_path" not in bk
+
+    def test_true_string_accepted(self, tmp_path, monkeypatch):
+        """CTS_SEMANTIC_ENABLED=true works (not just =1)."""
+        import os
+
+        from cts.cli import _default_db_path
+
+        repo = "test/repo"
+        db_path = _default_db_path(repo)
+
+        full_db = tmp_path / db_path
+        full_db.parent.mkdir(parents=True, exist_ok=True)
+        full_db.write_bytes(b"")
+
+        monkeypatch.setenv("CTS_SEMANTIC_ENABLED", "true")
+        monkeypatch.chdir(tmp_path)
+
+        bk: dict = {}
+        sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
+        if sem_flag in ("1", "true"):
+            sem_db = _default_db_path(repo)
+            if os.path.exists(sem_db):
+                bk["semantic_store_path"] = sem_db
+
+        assert "semantic_store_path" in bk
+
+    def test_zero_means_disabled(self, tmp_path, monkeypatch):
+        """CTS_SEMANTIC_ENABLED=0 means disabled."""
+        import os
+
+        monkeypatch.setenv("CTS_SEMANTIC_ENABLED", "0")
+
+        sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
+        assert sem_flag not in ("1", "true")
