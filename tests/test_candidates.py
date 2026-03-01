@@ -16,10 +16,7 @@ from cts.semantic.config import SemanticConfig, load_config
 
 def _make_sources(n: int) -> list:
     """Create ranked_sources with n unique file paths."""
-    return [
-        {"path": f"src/file_{i:03d}.py", "score": 1.0 - i * 0.05}
-        for i in range(n)
-    ]
+    return [{"path": f"src/file_{i:03d}.py", "score": 1.0 - i * 0.05} for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -58,17 +55,13 @@ class TestCandidateSelection:
 
 class TestStrategyNone:
     def test_returns_empty_paths(self):
-        result = select_candidates(
-            _make_sources(20), strategy="none"
-        )
+        result = select_candidates(_make_sources(20), strategy="none")
         assert result.strategy == "none"
         assert result.allowed_paths == []
         assert result.candidate_files == 0
 
     def test_rules_hit_says_no_narrowing(self):
-        result = select_candidates(
-            _make_sources(5), strategy="none"
-        )
+        result = select_candidates(_make_sources(5), strategy="none")
         assert "no narrowing" in result.candidate_rules_hit
 
 
@@ -98,9 +91,7 @@ class TestExcludeTopK:
 
     def test_max_files_cap(self):
         sources = _make_sources(300)
-        result = select_candidates(
-            sources, exclude_top_k=5, max_files=50
-        )
+        result = select_candidates(sources, exclude_top_k=5, max_files=50)
         assert len(result.allowed_paths) <= 50
         assert result.candidate_files <= 50
 
@@ -217,9 +208,7 @@ class TestDebugMetadata:
         assert any("excluded top 5" in r for r in result.candidate_rules_hit)
 
     def test_rules_hit_tracks_cap(self):
-        result = select_candidates(
-            _make_sources(100), exclude_top_k=5, max_files=10
-        )
+        result = select_candidates(_make_sources(100), exclude_top_k=5, max_files=10)
         assert any("capped" in r for r in result.candidate_rules_hit)
 
     def test_excluded_files_sample_contains_top_paths(self):

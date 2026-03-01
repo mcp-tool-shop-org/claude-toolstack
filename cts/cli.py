@@ -48,6 +48,7 @@ from cts import __version__
 from cts import bundle as bundle_mod
 from cts import http
 from cts import render
+from cts.errors import handle_cli_error
 from cts import schema as schema_mod
 
 
@@ -2070,6 +2071,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Claude Toolstack CLI — bounded code intelligence client",
     )
     parser.add_argument("--version", action="version", version=f"cts {__version__}")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Show full tracebacks on error",
+    )
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -2837,8 +2844,15 @@ def main(argv: List[str] | None = None) -> None:
         "semantic": cmd_semantic,
     }
     fn = commands.get(args.command)
-    if fn:
-        fn(args)
-    else:
+    if not fn:
         parser.print_help()
         raise SystemExit(1)
+
+    debug = getattr(args, "debug", False)
+    try:
+        fn(args)
+    except SystemExit:
+        raise  # Let SystemExit pass through (exit codes from subcommands)
+    except BaseException as exc:
+        code = handle_cli_error(exc, debug=debug)
+        raise SystemExit(code)

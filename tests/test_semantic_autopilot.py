@@ -1002,10 +1002,7 @@ class TestSemanticNarrowing:
 
         db_path, repo_root = _create_test_store(tmp_path)
 
-        ranked = [
-            {"path": f"src/top{i}.py", "score": 1.0 - i * 0.1}
-            for i in range(15)
-        ]
+        ranked = [{"path": f"src/top{i}.py", "score": 1.0 - i * 0.1} for i in range(15)]
 
         slices, debug = bundle_mod.semantic_retrieve_and_slice(
             "authenticate user",
@@ -1051,10 +1048,7 @@ class TestSemanticNarrowing:
 
         db_path, repo_root = _create_test_store(tmp_path)
 
-        ranked = [
-            {"path": f"src/top{i}.py", "score": 1.0 - i * 0.1}
-            for i in range(15)
-        ]
+        ranked = [{"path": f"src/top{i}.py", "score": 1.0 - i * 0.1} for i in range(15)]
 
         slices, debug = bundle_mod.semantic_retrieve_and_slice(
             "authenticate user",
@@ -1088,8 +1082,7 @@ class TestSemanticNarrowing:
         # All ranked sources are files that don't exist in the store
         # so exclude_top_k removes them all, leaving empty candidate pool
         ranked = [
-            {"path": f"nonexistent{i}.py", "score": 1.0 - i * 0.1}
-            for i in range(3)
+            {"path": f"nonexistent{i}.py", "score": 1.0 - i * 0.1} for i in range(3)
         ]
 
         slices, debug = bundle_mod.semantic_retrieve_and_slice(
@@ -1104,7 +1097,6 @@ class TestSemanticNarrowing:
 
         # Should still find results via fallback
         assert "narrowed_search" in debug
-        ns_debug = debug["narrowed_search"]
         # Fallback fires when no candidates match the allowed_paths
         # Either we get results from narrowing or from fallback
         assert debug["hits_topk"] >= 0
@@ -1165,13 +1157,17 @@ class TestQueryEmbedCache:
 
         # First call — cold
         _, debug1 = bundle_mod.semantic_retrieve_and_slice(
-            "authenticate", db_path, repo_root,
+            "authenticate",
+            db_path,
+            repo_root,
         )
         assert "query_embed_cached" in debug1
 
         # Second call — warm (should be cached)
         _, debug2 = bundle_mod.semantic_retrieve_and_slice(
-            "authenticate", db_path, repo_root,
+            "authenticate",
+            db_path,
+            repo_root,
         )
         assert "query_embed_cached" in debug2
         assert debug2["query_embed_cached"] is True

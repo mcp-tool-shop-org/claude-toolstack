@@ -24,13 +24,15 @@ A ready-to-deploy stack that keeps Claude Code productive on large, multi-langua
 ```
 64-GB Linux host (Ubuntu 22.04 / Fedora 38)
 ├── systemd slices (cgroup v2 governance)
+│   ├── claude-gw.slice      — gateway + socket proxy
 │   ├── claude-index.slice   — indexing + search
 │   ├── claude-lsp.slice     — language servers
 │   ├── claude-build.slice   — build/test runners
 │   └── claude-vector.slice  — vector DB (optional)
 ├── Docker Compose stack
 │   ├── gateway         — FastAPI, 6 endpoints, 127.0.0.1:8088
-│   ├── dockerproxy     — socket proxy (CONTAINERS+EXEC only)
+│   ├── dockerproxy     — socket proxy (exec-only model)
+│   ├── toolstack       — cts CLI inside the stack (cli profile)
 │   ├── ctags           — universal-ctags indexer
 │   └── build           — generic build runner
 └── Claude Code / Claude Desktop
@@ -134,7 +136,19 @@ cts symbol PaymentService --repo myorg/myrepo
 # Run tests
 cts job test --repo myorg/myrepo --preset node
 
-# All commands support: --format json|text|claude --request-id <id>
+# Stack diagnostics
+cts doctor
+cts doctor --format json
+
+# Performance knobs
+cts perf
+cts perf --format json
+
+# Semantic search (default-on when store exists)
+cts semantic index --repo myorg/myrepo --root /workspace/repos/myorg/myrepo
+cts semantic search "what does auth do?" --repo myorg/myrepo
+
+# All commands support: --format json|text|claude --request-id <id> --debug
 ```
 
 ### Evidence Bundles v2 (`--format claude`)
@@ -195,7 +209,8 @@ systemd slices enforce MemoryHigh (throttle) and MemoryMax (hard cap) per servic
 
 | Slice | MemoryHigh | MemoryMax | Purpose |
 |-------|-----------|-----------|---------|
-| `claude-index` | 6 GB | 10 GB | Indexers, search, gateway |
+| `claude-gw` | 2 GB | 4 GB | Gateway + socket proxy |
+| `claude-index` | 6 GB | 10 GB | Indexers, search |
 | `claude-lsp` | 8 GB | 16 GB | Language servers |
 | `claude-build` | 10 GB | 18 GB | Build/test runners |
 | `claude-vector` | 8 GB | 16 GB | Vector DB (optional) |
@@ -237,25 +252,30 @@ OS + headroom: 10-14 GB always reserved for filesystem cache, desktop, SSH.
 - Touch Docker images, volumes, networks, or system (proxy blocks)
 - Return unbounded output (512 KB hard cap)
 - Accept connections from non-localhost (bind address)
+- Collect or send telemetry — **no telemetry, no phone-home, no analytics**
 
 ## Directory Structure
 
 ```
 claude-toolstack/
-├── compose.yaml           # Docker Compose stack
+├── compose.yaml           # Docker Compose stack (exec-only model)
 ├── .env.example           # Configuration template
 ├── pyproject.toml         # CLI packaging (cts)
 ├── repos.yaml             # Declarative repo registry
-├── cts/                   # CLI client (zero deps)
-│   ├── cli.py             # argparse commands
+├── cts/                   # CLI client (zero deps for core)
+│   ├── cli.py             # argparse commands (doctor, perf, search, ...)
+│   ├── errors.py          # Structured error shape (CtsError)
 │   ├── http.py            # gateway HTTP client
 │   ├── render.py          # json/text/claude renderers (v1+v2)
 │   ├── bundle.py          # v2 bundle orchestrator (4 modes)
 │   ├── ranking.py         # path scoring, trace extraction, recency
-│   └── config.py          # env + defaults
-├── tests/                 # Unit tests (pytest)
-│   ├── test_ranking.py    # 22 tests: path score, trace, recency
-│   └── test_bundle.py     # 18 tests: bundle modes, helpers
+│   ├── config.py          # env + defaults
+│   └── semantic/          # Embedding-based search (optional dep)
+│       ├── store.py       # SQLite vector store
+│       ├── search.py      # cosine similarity + narrowing
+│       ├── candidates.py  # candidate selection strategies
+│       └── config.py      # semantic knobs
+├── tests/                 # 890+ unit tests (pytest)
 ├── gateway/
 │   ├── main.py            # FastAPI gateway
 │   ├── Dockerfile         # python:3.12-slim + ripgrep + tini
@@ -263,22 +283,19 @@ claude-toolstack/
 ├── nginx/
 │   └── gateway.conf       # Reverse proxy (optional)
 ├── systemd/
-│   ├── claude-index.slice
-│   ├── claude-lsp.slice
-│   ├── claude-build.slice
+│   ├── claude-gw.slice    # gateway + dockerproxy (2G/4G)
+│   ├── claude-index.slice # indexers + search (6G/10G)
+│   ├── claude-lsp.slice   # language servers (8G/16G)
+│   ├── claude-build.slice # build/test runners (10G/18G)
 │   ├── claude-vector.slice
 │   ├── claude-toolstack.service
-│   ├── zram-generator.conf
-│   ├── 99-claude-dev.conf
-│   ├── 99-inotify-large-repos.conf
-│   └── daemon.json
+│   └── ...                # zram, sysctl, daemon.json
 ├── scripts/
 │   ├── bootstrap.sh       # Host setup (run once)
+│   ├── verify.sh          # All quality gates in one command
+│   ├── cts-docker         # Run cts inside Docker stack
 │   ├── smoke-test.sh      # Validation suite
-│   ├── health.sh          # Quick health check
-│   ├── add-repo.sh        # Repo onboarding
-│   ├── policy-lint.sh     # Security posture check
-│   └── triage.sh          # Diagnostics (--request-id)
+│   └── ...                # health, add-repo, policy-lint, triage
 └── docs/
     └── tuning.md          # Slice tuning guide
 ```

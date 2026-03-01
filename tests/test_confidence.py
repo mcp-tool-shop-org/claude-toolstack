@@ -195,7 +195,6 @@ class TestBundleConfidence(unittest.TestCase):
         conf = bundle_confidence(_rich_bundle())
         self.assertEqual(conf["signals"]["low_match_penalty"], 0.0)
 
-
     def test_change_mode_bonus_full(self):
         """Change mode with diff + all changed files covered."""
         b = _rich_bundle()

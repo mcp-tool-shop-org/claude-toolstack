@@ -129,9 +129,7 @@ class TestStoreFilteredRetrieval:
         _populate_store(store, 10)
 
         paths = [f"src/file_{i:03d}.py" for i in range(10)]
-        rows, capped = store.get_embeddings_filtered(
-            paths, max_chunks=3
-        )
+        rows, capped = store.get_embeddings_filtered(paths, max_chunks=3)
         assert len(rows) == 3
         assert capped
         store.close()
@@ -150,7 +148,9 @@ class TestNarrowedSearch:
 
         query = _make_vec(8, seed=5.0)
         result = narrowed_search(
-            query, store, dim=8,
+            query,
+            store,
+            dim=8,
             allowed_paths=["src/file_005.py", "src/file_010.py"],
             topk=2,
         )
@@ -167,7 +167,10 @@ class TestNarrowedSearch:
 
         query = _make_vec(8, seed=3.0)
         result = narrowed_search(
-            query, store, dim=8, topk=3,
+            query,
+            store,
+            dim=8,
+            topk=3,
         )
         assert len(result.hits) <= 3
         assert result.debug["candidate_chunks_considered"] == 10
@@ -181,7 +184,9 @@ class TestNarrowedSearch:
 
         query = _make_vec(8, seed=1.0)
         result = narrowed_search(
-            query, store, dim=8,
+            query,
+            store,
+            dim=8,
             allowed_paths=["nonexistent.py"],
             fallback="global_tight",
             fallback_topk=3,
@@ -199,7 +204,9 @@ class TestNarrowedSearch:
 
         query = _make_vec(8, seed=1.0)
         result = narrowed_search(
-            query, store, dim=8,
+            query,
+            store,
+            dim=8,
             allowed_paths=["nonexistent.py"],
             fallback="skip",
         )
@@ -216,7 +223,9 @@ class TestNarrowedSearch:
         query = _make_vec(8, seed=1.0)
         cand_debug = {"strategy": "exclude_top_k", "excluded_top_k": 5}
         result = narrowed_search(
-            query, store, dim=8,
+            query,
+            store,
+            dim=8,
             allowed_paths=["src/file_005.py"],
             candidate_debug=cand_debug,
         )
@@ -235,7 +244,9 @@ class TestNarrowedSearch:
 
         query = _make_vec(8, seed=1.0)
         result = narrowed_search(
-            query, store, dim=8,
+            query,
+            store,
+            dim=8,
             max_chunks=5,
             topk=3,
         )
@@ -310,12 +321,14 @@ class TestCorpusNarrowingFields:
         }
 
     def test_extracts_from_debug(self):
-        sidecar = self._make_sidecar(cand_data={
-            "strategy": "exclude_top_k",
-            "candidate_files": 42,
-            "candidate_chunks_considered": 7200,
-            "fallback_used": False,
-        })
+        sidecar = self._make_sidecar(
+            cand_data={
+                "strategy": "exclude_top_k",
+                "candidate_files": 42,
+                "candidate_chunks_considered": 7200,
+                "fallback_used": False,
+            }
+        )
         rec = extract_record(sidecar)
         assert rec.semantic_candidate_strategy == "exclude_top_k"
         assert rec.semantic_candidate_files == 42
@@ -329,12 +342,14 @@ class TestCorpusNarrowingFields:
         assert rec.semantic_candidate_files == 0
 
     def test_fallback_detected(self):
-        sidecar = self._make_sidecar(cand_data={
-            "strategy": "exclude_top_k",
-            "candidate_files": 0,
-            "candidate_chunks_considered": 0,
-            "fallback_used": True,
-        })
+        sidecar = self._make_sidecar(
+            cand_data={
+                "strategy": "exclude_top_k",
+                "candidate_files": 0,
+                "candidate_chunks_considered": 0,
+                "fallback_used": True,
+            }
+        )
         rec = extract_record(sidecar)
         assert rec.semantic_candidate_fallback_used is True
 

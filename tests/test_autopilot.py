@@ -505,9 +505,7 @@ class TestForceTraceSlicesApply(unittest.TestCase):
     def test_caps_evidence_files_at_15(self):
         action = {
             "name": "force_trace_slices",
-            "trace_targets": [
-                {"path": f"f{i}.py", "line": i} for i in range(10)
-            ],
+            "trace_targets": [{"path": f"f{i}.py", "line": i} for i in range(10)],
         }
         params = {"evidence_files": 12}
         new = apply_refinement(params, action)
@@ -516,9 +514,7 @@ class TestForceTraceSlicesApply(unittest.TestCase):
     def test_caps_extra_at_max_extra_slices(self):
         action = {
             "name": "force_trace_slices",
-            "trace_targets": [
-                {"path": f"f{i}.py", "line": i} for i in range(10)
-            ],
+            "trace_targets": [{"path": f"f{i}.py", "line": i} for i in range(10)],
         }
         params = {"evidence_files": 5}
         new = apply_refinement(params, action)
@@ -564,9 +560,7 @@ class TestForceTraceSlicesExecution(unittest.TestCase):
                 slices.append({"path": fp, "start": 1, "lines": ["..."] * 20})
         # Also add some generic slices
         for i in range(min(evidence_files - len(slices), 2)):
-            slices.append(
-                {"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10}
-            )
+            slices.append({"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10})
 
         return {
             "version": 2,
@@ -576,12 +570,16 @@ class TestForceTraceSlicesExecution(unittest.TestCase):
             "query": kwargs.get("query", "ConnectionError"),
             "ranked_sources": [
                 {
-                    "path": "app/handler.py", "line": 42,
-                    "score": 1.2, "in_trace": True,
+                    "path": "app/handler.py",
+                    "line": 42,
+                    "score": 1.2,
+                    "in_trace": True,
                 },
                 {
-                    "path": "lib/db.py", "line": 15,
-                    "score": 0.9, "in_trace": True,
+                    "path": "lib/db.py",
+                    "line": 15,
+                    "score": 0.9,
+                    "in_trace": True,
                 },
                 {"path": "gen/f0.py", "line": 1, "score": 0.3},
             ],
@@ -641,15 +639,15 @@ def _symbol_bundle(*, defs_in_slices: bool = False, callers_in_slices: bool = Fa
     """
     slices = []
     if defs_in_slices:
-        slices.append(
-            {"path": "lib/parser.py", "start": 1, "lines": ["..."] * 20}
-        )
+        slices.append({"path": "lib/parser.py", "start": 1, "lines": ["..."] * 20})
     if callers_in_slices:
-        slices.extend([
-            {"path": "src/main.py", "start": 1, "lines": ["..."] * 10},
-            {"path": "src/handler.py", "start": 1, "lines": ["..."] * 10},
-            {"path": "tests/test_p.py", "start": 1, "lines": ["..."] * 10},
-        ])
+        slices.extend(
+            [
+                {"path": "src/main.py", "start": 1, "lines": ["..."] * 10},
+                {"path": "src/handler.py", "start": 1, "lines": ["..."] * 10},
+                {"path": "tests/test_p.py", "start": 1, "lines": ["..."] * 10},
+            ]
+        )
 
     return {
         "version": 2,
@@ -856,16 +854,12 @@ class TestSymbolModeApply(unittest.TestCase):
             "_force_slice_paths": ["lib/parser.py"],
         }
         new = apply_refinement(params, action)
-        self.assertEqual(
-            new["_force_slice_paths"], ["lib/parser.py", "src/main.py"]
-        )
+        self.assertEqual(new["_force_slice_paths"], ["lib/parser.py", "src/main.py"])
 
     def test_expand_callers_caps_at_15(self):
         action = {
             "name": "expand_callers",
-            "caller_targets": [
-                {"path": f"f{i}.py", "line": i} for i in range(10)
-            ],
+            "caller_targets": [{"path": f"f{i}.py", "line": i} for i in range(10)],
         }
         params = {"evidence_files": 12}
         new = apply_refinement(params, action)
@@ -887,9 +881,7 @@ class TestSymbolModeExecution(unittest.TestCase):
             slices.append({"path": fp, "start": 1, "lines": ["..."] * 20})
         # Fill remaining
         for i in range(min(evidence_files - len(slices), 1)):
-            slices.append(
-                {"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10}
-            )
+            slices.append({"path": f"gen/f{i}.py", "start": 1, "lines": ["..."] * 10})
 
         return {
             "version": 2,
@@ -1277,14 +1269,13 @@ class TestTriggerReasons(unittest.TestCase):
         ]
         for b in bundles:
             conf = bundle_confidence(b)
-            actions = plan_refinements(
-                b, conf, current_params={"max_matches": 50}
-            )
+            actions = plan_refinements(b, conf, current_params={"max_matches": 50})
             for a in actions:
                 self.assertIn(
-                    "trigger_reason", a,
+                    "trigger_reason",
+                    a,
                     f"Action '{a['name']}' missing trigger_reason "
-                    f"for mode={b.get('mode')}"
+                    f"for mode={b.get('mode')}",
                 )
 
 
