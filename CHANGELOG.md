@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-03-01
+
+### Added
+
+- **HANDBOOK.md** — complete operational reference (13 chapters + 3 appendices): architecture, commands, performance model, Docker execution, resource governance, security, tuning, troubleshooting, design decisions, ELI5, and full env var / API / bundle schema reference
+- **Publish workflow** — 3-channel automated release (PyPI via OIDC, GHCR gateway image, GitHub Release artifacts)
+
 ## [1.0.0] - 2026-03-01
 
 ### Added

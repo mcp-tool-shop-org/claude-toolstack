@@ -9,7 +9,7 @@ export const config: SiteConfig = {
   footerText: 'MIT Licensed — built by <a href="https://mcp-tool-shop.github.io/" style="color:var(--color-muted);text-decoration:underline">MCP Tool Shop</a>',
 
   hero: {
-    badge: 'v1.0.0',
+    badge: 'v1.0.1',
     headline: 'Bounded code intelligence',
     headlineAccent: 'without the thrash.',
     description: 'Keep Claude Code productive on large, multi-language repositories. Durable indexes in resource-governed containers — stream only the smallest necessary evidence.',
