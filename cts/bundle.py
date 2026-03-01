@@ -27,6 +27,9 @@ from cts.ranking import (
     rank_matches,
 )
 
+# Lazy-initialized embedder cache (expensive to load)
+_EMBEDDER_CACHE: Optional[Any] = None
+
 # Bundle modes
 MODES = ("default", "error", "symbol", "change")
 
@@ -228,6 +231,181 @@ def _build_ctags_info(
 
 
 # ---------------------------------------------------------------------------
+# Semantic retrieval helper
+# ---------------------------------------------------------------------------
+
+
+def _get_or_create_embedder() -> Any:
+    """Lazy-load sentence-transformer embedder (cached per process)."""
+    global _EMBEDDER_CACHE
+    if _EMBEDDER_CACHE is None:
+        from cts.semantic.embedder import create_embedder
+
+        _EMBEDDER_CACHE = create_embedder()
+    return _EMBEDDER_CACHE
+
+
+def _read_local_slice(
+    repo_root: str,
+    path: str,
+    start_line: int,
+    end_line: int,
+    context: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Read a file slice directly from disk (no gateway needed).
+
+    Returns a slice dict compatible with fetch_slices output,
+    or None if the file can't be read.
+    """
+    import os
+
+    full_path = os.path.join(repo_root, path.replace("/", os.sep))
+    try:
+        with open(full_path, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except (OSError, IOError):
+        return None
+
+    if not all_lines:
+        return None
+
+    # Expand range by context lines
+    s = max(0, start_line - 1 - context)
+    e = min(len(all_lines), end_line + context)
+    lines = [ln.rstrip("\n\r") for ln in all_lines[s:e]]
+
+    # Skip minified files
+    if lines:
+        avg_len = sum(len(ln) for ln in lines) / len(lines)
+        if avg_len > MINIFIED_AVG_THRESHOLD:
+            return None
+
+    return {
+        "path": path,
+        "start": s + 1,
+        "end": e,
+        "lines": lines,
+        "source": "semantic",
+    }
+
+
+def semantic_retrieve_and_slice(
+    query: str,
+    store_path: str,
+    repo_root: str,
+    *,
+    max_slices: int = 3,
+    topk: int = 8,
+    context: int = 3,
+    max_seconds: float = 4.0,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Run semantic retrieval and return tagged slices + debug metadata.
+
+    Pipeline:
+      1. Embed query text
+      2. Search semantic store for top-K chunks
+      3. Convert hits to (path, line_range) candidates
+      4. Read file slices from disk (deduped)
+      5. Return slices + debug payload
+
+    Args:
+        query: Search query text.
+        store_path: Path to semantic SQLite store.
+        repo_root: Local filesystem root for reading files.
+        max_slices: Maximum semantic slices to add (default: 3).
+        topk: Top-K chunks from semantic search.
+        context: Context lines around each hit.
+        max_seconds: Time budget for the entire pipeline.
+
+    Returns:
+        Tuple of (slices, debug_metadata).
+    """
+    import os
+
+    t0 = time.monotonic()
+    debug: Dict[str, Any] = {
+        "invoked": True,
+        "store_path": store_path,
+    }
+
+    # Verify store exists
+    if not os.path.exists(store_path):
+        debug["error"] = "store_not_found"
+        debug["time_ms"] = round((time.monotonic() - t0) * 1000, 1)
+        return [], debug
+
+    try:
+        from cts.semantic.search import cosine_search_numpy
+        from cts.semantic.store import SemanticStore
+
+        # Open store
+        store = SemanticStore(store_path)
+        status = store.get_status()
+        dim = status["dim"]
+        debug["store_chunks"] = status["chunks"]
+        debug["store_dim"] = dim
+
+        if dim == 0 or status["embeddings"] == 0:
+            store.close()
+            debug["error"] = "empty_store"
+            debug["time_ms"] = round((time.monotonic() - t0) * 1000, 1)
+            return [], debug
+
+        # Embed query
+        embedder = _get_or_create_embedder()
+        t_embed = time.monotonic()
+        query_vecs = embedder.embed_texts([query])
+        query_vec = query_vecs[0]
+        debug["query_embed_ms"] = round((time.monotonic() - t_embed) * 1000, 1)
+
+        # Load all embeddings and search
+        t_search = time.monotonic()
+        candidates, _ = store.get_embeddings_filtered([], max_chunks=0)
+        hits = cosine_search_numpy(query_vec, candidates, dim, topk=topk)
+        debug["search_ms"] = round((time.monotonic() - t_search) * 1000, 1)
+        debug["hits_topk"] = len(hits)
+
+        store.close()
+
+        # Convert hits to slices (deduped by path)
+        slices: List[Dict[str, Any]] = []
+        seen_paths: set = set()
+        files_touched: List[str] = []
+
+        for hit in hits:
+            if hit.path in seen_paths:
+                continue
+            seen_paths.add(hit.path)
+            files_touched.append(hit.path)
+
+            if len(slices) >= max_slices:
+                break
+
+            sl = _read_local_slice(
+                repo_root,
+                hit.path,
+                hit.start_line,
+                hit.end_line,
+                context=context,
+            )
+            if sl is not None:
+                sl["semantic_score"] = round(hit.score, 4)
+                slices.append(sl)
+
+        debug["hit_count"] = len(slices)
+        debug["slices_added"] = len(slices)
+        debug["files_touched"] = files_touched[:10]
+        debug["time_ms"] = round((time.monotonic() - t0) * 1000, 1)
+
+        return slices, debug
+
+    except Exception as exc:
+        debug["error"] = str(exc)
+        debug["time_ms"] = round((time.monotonic() - t0) * 1000, 1)
+        return [], debug
+
+
+# ---------------------------------------------------------------------------
 # Default bundle
 # ---------------------------------------------------------------------------
 
@@ -245,6 +423,8 @@ def build_default_bundle(
     explain_top: int = 10,
     ctags_info: Optional[Dict[str, Any]] = None,
     diff_text: Optional[str] = None,
+    semantic_store_path: Optional[str] = None,
+    _semantic_invoked: bool = False,
 ) -> Dict[str, Any]:
     """Build a default evidence bundle from search results."""
     timer = _Timer()
@@ -298,6 +478,25 @@ def build_default_bundle(
     bundle["slices"] = fetch_slices(top_files, repo, request_id=rid, context=context)
     timer.lap("slice_fetch")
 
+    # Semantic augmentation — only when autopilot requested it
+    semantic_debug = None
+    if _semantic_invoked and semantic_store_path and repo_root:
+        existing_paths = {s.get("path", "") for s in bundle["slices"]}
+        sem_slices, semantic_debug = semantic_retrieve_and_slice(
+            query,
+            semantic_store_path,
+            repo_root,
+            max_slices=3,
+            topk=8,
+            context=context,
+        )
+        # Merge: add semantic slices for paths not already covered
+        for sl in sem_slices:
+            if sl.get("path", "") not in existing_paths:
+                bundle["slices"].append(sl)
+                existing_paths.add(sl["path"])
+        timer.lap("semantic_retrieve")
+
     # Suggested next commands
     bundle["suggested_commands"] = _suggest_commands(
         repo, query, matches, mode="default"
@@ -315,6 +514,8 @@ def build_default_bundle(
                 "mode": "default",
             },
         )
+        if semantic_debug:
+            bundle["_debug"]["semantic"] = semantic_debug
 
     return bundle
 
@@ -338,6 +539,8 @@ def build_error_bundle(
     explain_top: int = 10,
     ctags_info: Optional[Dict[str, Any]] = None,
     diff_text: Optional[str] = None,
+    semantic_store_path: Optional[str] = None,
+    _semantic_invoked: bool = False,
 ) -> Dict[str, Any]:
     """Build an error-aware evidence bundle.
 

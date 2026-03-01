@@ -636,3 +636,297 @@ class TestCLISemanticStoreInjection:
 
         sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
         assert sem_flag not in ("1", "true")
+
+
+# ---------------------------------------------------------------------------
+# 5.5 — Semantic retrieval pipeline (Phase 4.3)
+# ---------------------------------------------------------------------------
+
+
+def _create_test_store(tmp_path, repo="test/repo", dim=384):
+    """Helper: create a SemanticStore with mock embeddings."""
+    from cts.semantic.embedder import MockEmbedder
+    from cts.semantic.store import SemanticStore
+
+    db_path = str(tmp_path / "semantic.sqlite3")
+    store = SemanticStore(db_path)
+
+    embedder = MockEmbedder(dim=dim)
+
+    # Create test source files
+    files = {
+        "src/auth.py": "def authenticate(user, password):\n    pass\n" * 10,
+        "src/config.py": "class AppConfig:\n    timeout = 30\n" * 10,
+        "src/handler.py": "def handle_request(req):\n    return response\n" * 10,
+    }
+    for rel_path, content in files.items():
+        full = tmp_path / "repo" / rel_path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
+
+    # Index chunks manually
+    from cts.semantic.chunker import Chunk
+
+    chunks = []
+    for rel_path, content in files.items():
+        lines = content.splitlines()
+        chunk = Chunk(
+            chunk_id=f"{repo}:{rel_path}:1-{len(lines)}",
+            repo=repo,
+            path=rel_path,
+            start_line=1,
+            end_line=len(lines),
+            content=content,
+            content_hash=str(hash(content)),
+        )
+        chunks.append(chunk)
+
+    store.upsert_chunks(chunks)
+
+    # Embed and store
+    texts = [c.content for c in chunks]
+    vecs = embedder.embed_texts(texts)
+    store.store_embeddings(
+        [c.chunk_id for c in chunks],
+        vecs,
+        model="mock-embedder",
+        dim=dim,
+    )
+
+    store.close()
+    return db_path, str(tmp_path / "repo")
+
+
+class TestSemanticRetrieveAndSlice:
+    """Verify the semantic retrieval pipeline in the bundle builder."""
+
+    def test_returns_slices_and_debug(self, tmp_path, monkeypatch):
+        """Pipeline returns tagged slices and debug metadata."""
+        import cts.bundle as bundle_mod
+
+        monkeypatch.setattr(
+            bundle_mod,
+            "_EMBEDDER_CACHE",
+            None,
+        )
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate user",
+            db_path,
+            repo_root,
+            max_slices=3,
+        )
+
+        assert debug["invoked"] is True
+        assert debug["time_ms"] >= 0
+        assert debug["hits_topk"] > 0
+        assert debug["slices_added"] > 0
+        assert len(slices) > 0
+        assert len(slices) <= 3
+
+        # Each slice has the semantic tag
+        for sl in slices:
+            assert sl["source"] == "semantic"
+            assert "semantic_score" in sl
+            assert sl["path"] in ("src/auth.py", "src/config.py", "src/handler.py")
+
+    def test_respects_max_slices_cap(self, tmp_path, monkeypatch):
+        """Semantic slices are capped at max_slices."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "config",
+            db_path,
+            repo_root,
+            max_slices=1,
+        )
+
+        assert len(slices) <= 1
+        assert debug["slices_added"] <= 1
+
+    def test_missing_store_returns_empty(self, tmp_path):
+        """Returns empty slices when store file doesn't exist."""
+        from cts.bundle import semantic_retrieve_and_slice
+
+        slices, debug = semantic_retrieve_and_slice(
+            "query",
+            str(tmp_path / "nonexistent.sqlite3"),
+            str(tmp_path),
+        )
+
+        assert slices == []
+        assert debug["error"] == "store_not_found"
+
+    def test_empty_store_returns_empty(self, tmp_path, monkeypatch):
+        """Returns empty slices when store has no embeddings."""
+        from cts.semantic.store import SemanticStore
+
+        db_path = str(tmp_path / "empty.sqlite3")
+        store = SemanticStore(db_path)
+        store.close()
+
+        from cts.bundle import semantic_retrieve_and_slice
+
+        slices, debug = semantic_retrieve_and_slice(
+            "query",
+            db_path,
+            str(tmp_path),
+        )
+
+        assert slices == []
+        assert debug["error"] == "empty_store"
+
+
+class TestBuildDefaultBundleSemantic:
+    """Verify build_default_bundle with semantic augmentation."""
+
+    def _make_search_data(self, query="test", matches=3):
+        return {
+            "repo": "test/repo",
+            "query": query,
+            "count": matches,
+            "matches": [
+                {"path": f"src/file{i}.py", "line": 10, "snippet": f"match {i}"}
+                for i in range(matches)
+            ],
+            "truncated": False,
+        }
+
+    def test_no_semantic_by_default(self, monkeypatch):
+        """Without semantic flags, no semantic section appears."""
+        import cts.bundle as bundle_mod
+
+        # Mock fetch_slices to avoid gateway dependency
+        monkeypatch.setattr(bundle_mod, "fetch_slices", lambda *a, **kw: [])
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(),
+            repo="test/repo",
+            debug=True,
+        )
+
+        assert "_debug" in b
+        assert "semantic" not in b["_debug"]
+
+    def test_semantic_not_invoked_without_flag(self, monkeypatch):
+        """Even with store_path, semantic won't run without _semantic_invoked."""
+        import cts.bundle as bundle_mod
+
+        monkeypatch.setattr(bundle_mod, "fetch_slices", lambda *a, **kw: [])
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(),
+            repo="test/repo",
+            debug=True,
+            semantic_store_path="/tmp/fake.sqlite3",
+            _semantic_invoked=False,
+        )
+
+        assert "semantic" not in b["_debug"]
+
+    def test_semantic_runs_when_both_flags_set(self, tmp_path, monkeypatch):
+        """When both _semantic_invoked and store_path are set, semantic runs."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        monkeypatch.setattr(bundle_mod, "fetch_slices", lambda *a, **kw: [])
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(query="authenticate"),
+            repo="test/repo",
+            repo_root=repo_root,
+            debug=True,
+            semantic_store_path=db_path,
+            _semantic_invoked=True,
+        )
+
+        assert "_debug" in b
+        assert "semantic" in b["_debug"]
+        sem = b["_debug"]["semantic"]
+        assert sem["invoked"] is True
+        assert sem["slices_added"] > 0
+        assert sem["time_ms"] >= 0
+
+        # Semantic slices appear in the bundle
+        sem_slices = [s for s in b["slices"] if s.get("source") == "semantic"]
+        assert len(sem_slices) > 0
+
+    def test_semantic_slices_tagged(self, tmp_path, monkeypatch):
+        """Semantic slices have source='semantic' and semantic_score."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        monkeypatch.setattr(bundle_mod, "fetch_slices", lambda *a, **kw: [])
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(query="config"),
+            repo="test/repo",
+            repo_root=repo_root,
+            debug=True,
+            semantic_store_path=db_path,
+            _semantic_invoked=True,
+        )
+
+        sem_slices = [s for s in b["slices"] if s.get("source") == "semantic"]
+        for sl in sem_slices:
+            assert "semantic_score" in sl
+            assert isinstance(sl["semantic_score"], float)
+            assert "lines" in sl
+            assert len(sl["lines"]) > 0
+
+    def test_semantic_dedupes_existing_paths(self, tmp_path, monkeypatch):
+        """Semantic slices don't duplicate paths already in lexical slices."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        # Return a lexical slice that overlaps with a semantic hit
+        monkeypatch.setattr(
+            bundle_mod,
+            "fetch_slices",
+            lambda *a, **kw: [{"path": "src/auth.py", "lines": ["line1"]}],
+        )
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        b = bundle_mod.build_default_bundle(
+            self._make_search_data(query="authenticate"),
+            repo="test/repo",
+            repo_root=repo_root,
+            debug=True,
+            semantic_store_path=db_path,
+            _semantic_invoked=True,
+        )
+
+        # src/auth.py should appear only once
+        auth_slices = [s for s in b["slices"] if s.get("path") == "src/auth.py"]
+        assert len(auth_slices) == 1
+        # The existing one (no source tag) should be kept, not the semantic one
+        assert auth_slices[0].get("source") != "semantic"
