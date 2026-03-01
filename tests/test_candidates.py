@@ -235,9 +235,9 @@ class TestDebugMetadata:
 
 
 class TestCandidateConfig:
-    def test_defaults_off(self):
+    def test_defaults_exclude_top_k(self):
         cfg = SemanticConfig()
-        assert cfg.candidate_strategy == "none"
+        assert cfg.candidate_strategy == "exclude_top_k"
         assert cfg.candidate_exclude_top_k == 10
         assert cfg.candidate_max_files == 200
         assert cfg.candidate_max_chunks == 20000

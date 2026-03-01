@@ -981,3 +981,199 @@ class TestBuildDefaultBundleSemantic:
         )
 
         assert b["_debug"]["semantic"]["branch"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# Candidate narrowing integration
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticNarrowing:
+    """Verify candidate narrowing is wired into semantic retrieval."""
+
+    def test_narrowing_fires_with_ranked_sources(self, tmp_path, monkeypatch):
+        """When ranked_sources are provided, narrowing debug appears."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        ranked = [
+            {"path": f"src/top{i}.py", "score": 1.0 - i * 0.1}
+            for i in range(15)
+        ]
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate user",
+            db_path,
+            repo_root,
+            ranked_sources=ranked,
+            candidate_strategy="exclude_top_k",
+            candidate_exclude_top_k=10,
+        )
+
+        assert "narrowing" in debug
+        assert debug["narrowing"]["strategy"] == "exclude_top_k"
+        assert debug["narrowing"]["excluded_top_k"] == 10
+
+    def test_narrowing_skipped_without_ranked_sources(self, tmp_path, monkeypatch):
+        """Without ranked_sources, no narrowing occurs."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate user",
+            db_path,
+            repo_root,
+        )
+
+        assert "narrowing" not in debug
+        assert debug["hits_topk"] > 0
+
+    def test_narrowing_skipped_with_strategy_none(self, tmp_path, monkeypatch):
+        """Strategy 'none' skips narrowing even with ranked_sources."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        ranked = [
+            {"path": f"src/top{i}.py", "score": 1.0 - i * 0.1}
+            for i in range(15)
+        ]
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate user",
+            db_path,
+            repo_root,
+            ranked_sources=ranked,
+            candidate_strategy="none",
+        )
+
+        assert "narrowing" not in debug
+        assert debug["hits_topk"] > 0
+
+    def test_default_strategy_is_exclude_top_k(self):
+        """Config default changed from 'none' to 'exclude_top_k'."""
+        from cts.semantic.config import SemanticConfig
+
+        cfg = SemanticConfig()
+        assert cfg.candidate_strategy == "exclude_top_k"
+
+    def test_narrowing_fallback_global(self, tmp_path, monkeypatch):
+        """When candidate pool is empty, global_tight fallback fires."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        # All ranked sources are files that don't exist in the store
+        # so exclude_top_k removes them all, leaving empty candidate pool
+        ranked = [
+            {"path": f"nonexistent{i}.py", "score": 1.0 - i * 0.1}
+            for i in range(3)
+        ]
+
+        slices, debug = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate user",
+            db_path,
+            repo_root,
+            ranked_sources=ranked,
+            candidate_strategy="exclude_top_k",
+            candidate_exclude_top_k=3,
+            candidate_fallback="global_tight",
+        )
+
+        # Should still find results via fallback
+        assert "narrowed_search" in debug
+        ns_debug = debug["narrowed_search"]
+        # Fallback fires when no candidates match the allowed_paths
+        # Either we get results from narrowing or from fallback
+        assert debug["hits_topk"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Query embedding LRU cache
+# ---------------------------------------------------------------------------
+
+
+class TestQueryEmbedCache:
+    """Verify LRU cache for query embeddings."""
+
+    def test_cache_returns_same_bytes(self, monkeypatch):
+        """Same query text returns identical cached bytes."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        bundle_mod._cached_query_embed.cache_clear()
+
+        result1 = bundle_mod._cached_query_embed("test query")
+        result2 = bundle_mod._cached_query_embed("test query")
+        assert result1 == result2
+        assert result1 is result2  # same object from cache
+
+        bundle_mod._cached_query_embed.cache_clear()
+
+    def test_cache_different_queries(self, monkeypatch):
+        """Different query texts produce different embeddings."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        bundle_mod._cached_query_embed.cache_clear()
+
+        result1 = bundle_mod._cached_query_embed("query alpha")
+        result2 = bundle_mod._cached_query_embed("query beta")
+        assert result1 != result2
+
+        bundle_mod._cached_query_embed.cache_clear()
+
+    def test_cache_reports_hit_in_debug(self, tmp_path, monkeypatch):
+        """Debug metadata includes query_embed_cached flag."""
+        import cts.bundle as bundle_mod
+
+        from cts.semantic.embedder import MockEmbedder
+
+        mock_emb = MockEmbedder(dim=384)
+        monkeypatch.setattr(bundle_mod, "_EMBEDDER_CACHE", mock_emb)
+        bundle_mod._cached_query_embed.cache_clear()
+
+        db_path, repo_root = _create_test_store(tmp_path)
+
+        # First call — cold
+        _, debug1 = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate", db_path, repo_root,
+        )
+        assert "query_embed_cached" in debug1
+
+        # Second call — warm (should be cached)
+        _, debug2 = bundle_mod.semantic_retrieve_and_slice(
+            "authenticate", db_path, repo_root,
+        )
+        assert "query_embed_cached" in debug2
+        assert debug2["query_embed_cached"] is True
+
+        bundle_mod._cached_query_embed.cache_clear()

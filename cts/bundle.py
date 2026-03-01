@@ -16,6 +16,7 @@ When debug=True, bundles include a _debug key with:
 from __future__ import annotations
 
 import json
+import functools
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -245,6 +246,13 @@ def _get_or_create_embedder() -> Any:
     return _EMBEDDER_CACHE
 
 
+@functools.lru_cache(maxsize=64)
+def _cached_query_embed(query: str) -> bytes:
+    """Cache query embeddings by text. Per-process, dies with process."""
+    embedder = _get_or_create_embedder()
+    return embedder.embed_texts([query])[0]
+
+
 def _read_local_slice(
     repo_root: str,
     path: str,
@@ -302,15 +310,22 @@ def semantic_retrieve_and_slice(
     topk: int = 8,
     context: int = 3,
     max_seconds: float = 4.0,
+    ranked_sources: Optional[List[Dict[str, Any]]] = None,
+    candidate_strategy: str = "exclude_top_k",
+    candidate_exclude_top_k: int = 10,
+    candidate_max_files: int = 200,
+    candidate_max_chunks: int = 20000,
+    candidate_fallback: str = "global_tight",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Run semantic retrieval and return tagged slices + debug metadata.
 
     Pipeline:
       1. Embed query text
-      2. Search semantic store for top-K chunks
-      3. Convert hits to (path, line_range) candidates
-      4. Read file slices from disk (deduped)
-      5. Return slices + debug payload
+      2. Optionally narrow candidates via lexical ranking
+      3. Search semantic store for top-K chunks
+      4. Convert hits to (path, line_range) candidates
+      5. Read file slices from disk (deduped)
+      6. Return slices + debug payload
 
     Args:
         query: Search query text.
@@ -320,6 +335,12 @@ def semantic_retrieve_and_slice(
         topk: Top-K chunks from semantic search.
         context: Context lines around each hit.
         max_seconds: Time budget for the entire pipeline.
+        ranked_sources: Lexically-ranked sources for candidate narrowing.
+        candidate_strategy: Narrowing strategy (exclude_top_k | none).
+        candidate_exclude_top_k: Top-K lexical files to exclude.
+        candidate_max_files: Max candidate files for narrowed search.
+        candidate_max_chunks: Max chunks to load for narrowed search.
+        candidate_fallback: Fallback when candidate pool empty (global_tight | skip).
 
     Returns:
         Tuple of (slices, debug_metadata).
@@ -355,17 +376,52 @@ def semantic_retrieve_and_slice(
             debug["time_ms"] = round((time.monotonic() - t0) * 1000, 1)
             return [], debug
 
-        # Embed query
-        embedder = _get_or_create_embedder()
+        # Embed query (LRU-cached per process)
         t_embed = time.monotonic()
-        query_vecs = embedder.embed_texts([query])
-        query_vec = query_vecs[0]
-        debug["query_embed_ms"] = round((time.monotonic() - t_embed) * 1000, 1)
+        query_vec = _cached_query_embed(query)
+        embed_ms = round((time.monotonic() - t_embed) * 1000, 1)
+        debug["query_embed_ms"] = embed_ms
+        debug["query_embed_cached"] = embed_ms < 1.0
 
-        # Load all embeddings and search
+        # Candidate narrowing: decide which files to search
+        use_narrowed = False
+        allowed_paths: List[str] = []
+        if (
+            ranked_sources
+            and candidate_strategy != "none"
+        ):
+            from cts.semantic.candidates import select_candidates
+
+            selection = select_candidates(
+                ranked_sources,
+                strategy=candidate_strategy,
+                exclude_top_k=candidate_exclude_top_k,
+                max_files=candidate_max_files,
+            )
+            allowed_paths = selection.allowed_paths
+            use_narrowed = True
+            debug["narrowing"] = selection.to_dict()
+
+        # Search: narrowed (with fallback) or global
         t_search = time.monotonic()
-        candidates, _ = store.get_embeddings_filtered([], max_chunks=0)
-        hits = cosine_search_numpy(query_vec, candidates, dim, topk=topk)
+        if use_narrowed:
+            from cts.semantic.search import narrowed_search as _narrowed_search
+
+            ns_result = _narrowed_search(
+                query_vec,
+                store,
+                dim,
+                allowed_paths=allowed_paths,
+                max_chunks=candidate_max_chunks,
+                topk=topk,
+                max_seconds=max(0.1, max_seconds - (time.monotonic() - t0)),
+                fallback=candidate_fallback,
+            )
+            hits = ns_result.hits
+            debug["narrowed_search"] = ns_result.debug
+        else:
+            candidates_data, _ = store.get_embeddings_filtered([], max_chunks=0)
+            hits = cosine_search_numpy(query_vec, candidates_data, dim, topk=topk)
         debug["search_ms"] = round((time.monotonic() - t_search) * 1000, 1)
         debug["hits_topk"] = len(hits)
 
@@ -494,6 +550,7 @@ def build_default_bundle(
             max_slices=3,
             topk=8,
             context=context,
+            ranked_sources=bundle.get("ranked_sources"),
         )
         if _semantic_branch:
             semantic_debug["branch"] = _semantic_branch

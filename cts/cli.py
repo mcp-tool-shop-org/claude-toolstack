@@ -29,6 +29,8 @@ Usage:
   cts semantic index --repo org/repo --root ./repo [--max-files N]
   cts semantic search "what does auth do?" --repo org/repo
   cts semantic status --repo org/repo [--db PATH]
+  cts doctor
+  cts perf [--format json]
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -169,6 +171,284 @@ def cmd_status(args: argparse.Namespace) -> None:
         render.render_text_status(data)
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Run diagnostic checks and report stack health."""
+    import shutil
+    import subprocess
+
+    fmt = getattr(args, "format", "text")
+    checks: list = []
+
+    # --- Check 1: Repo root ---
+    repo_yaml = os.path.exists("repos.yaml")
+    git_dir = os.path.exists(".git")
+    if repo_yaml and git_dir:
+        checks.append(("Repo root", "PASS", "repos.yaml and .git found"))
+    elif repo_yaml:
+        checks.append(("Repo root", "PASS", "repos.yaml found (no .git)"))
+    elif git_dir:
+        checks.append(("Repo root", "WARN", ".git found but repos.yaml missing"))
+    else:
+        checks.append(("Repo root", "FAIL", "No repos.yaml found — run from project root"))
+
+    # --- Check 2: Ripgrep ---
+    rg_path = shutil.which("rg")
+    if rg_path:
+        try:
+            ver = subprocess.run(
+                ["rg", "--version"], capture_output=True, text=True, timeout=5
+            )
+            version_line = (
+                ver.stdout.strip().split("\n")[0] if ver.stdout else "unknown"
+            )
+            checks.append(("Ripgrep", "PASS", f"{version_line}"))
+        except Exception:
+            checks.append(("Ripgrep", "WARN", f"Found at {rg_path}, version check failed"))
+    else:
+        checks.append(("Ripgrep", "FAIL", "rg not found in PATH — install ripgrep"))
+
+    # --- Check 3: ctags (optional) ---
+    ctags_path = shutil.which("ctags") or shutil.which("universal-ctags")
+    if ctags_path:
+        checks.append(("ctags", "PASS", f"Found at {ctags_path}"))
+    else:
+        checks.append(("ctags", "WARN", "Not found (symbol lookup unavailable)"))
+
+    # --- Check 4: Python deps (semantic) ---
+    try:
+        import numpy
+
+        checks.append(("numpy", "PASS", f"v{numpy.__version__}"))
+    except ImportError:
+        checks.append(("numpy", "WARN", "Not installed (needed for semantic search)"))
+
+    try:
+        import sentence_transformers
+
+        checks.append((
+            "sentence-transformers",
+            "PASS",
+            f"v{sentence_transformers.__version__}",
+        ))
+    except ImportError:
+        checks.append((
+            "sentence-transformers",
+            "WARN",
+            "Not installed (needed for semantic search)",
+        ))
+
+    # --- Check 5: Gateway ---
+    try:
+        from cts.config import gateway_url
+
+        gw = gateway_url()
+        http.get("/v1/status", timeout=5)
+        checks.append(("Gateway", "PASS", f"Reachable at {gw}"))
+    except SystemExit:
+        checks.append(("Gateway", "WARN", "Not reachable (CLAUDE_TOOLSTACK_API_KEY not set or gateway down)"))
+    except Exception as e:
+        checks.append(("Gateway", "WARN", f"Connection error: {e}"))
+
+    # --- Check 6: Semantic stores ---
+    cache_dir = "gw-cache"
+    store_found = False
+    if os.path.isdir(cache_dir):
+        for entry in sorted(os.listdir(cache_dir)):
+            db_path = os.path.join(cache_dir, entry, "semantic.sqlite3")
+            if os.path.exists(db_path):
+                store_found = True
+                try:
+                    from cts.semantic.store import SemanticStore
+
+                    store = SemanticStore(db_path)
+                    status = store.get_status()
+                    store.close()
+                    label = f"Semantic [{entry}]"
+                    last = status.get("last_indexed_at", "never")
+                    checks.append((
+                        label,
+                        "PASS",
+                        f"{status['chunks']} chunks, {status['embeddings']} embeddings, "
+                        f"model={status.get('model', '?')}, last={last}",
+                    ))
+                except Exception as e:
+                    checks.append((f"Semantic [{entry}]", "WARN", f"Error reading: {e}"))
+    if not store_found:
+        checks.append(("Semantic stores", "WARN", "No indexed repos found in gw-cache/"))
+
+    # --- Output ---
+    if fmt == "json":
+        result = [
+            {"check": c[0], "status": c[1], "detail": c[2]} for c in checks
+        ]
+        print(json.dumps(result, indent=2))
+    else:
+        for name, status, detail in checks:
+            marker = {"PASS": "+", "WARN": "~", "FAIL": "!"}[status]
+            print(f"  [{marker}] {name}: {detail}")
+
+        fails = sum(1 for _, s, _ in checks if s == "FAIL")
+        warns = sum(1 for _, s, _ in checks if s == "WARN")
+        if fails:
+            print(f"\n  {fails} check(s) failed, {warns} warning(s).")
+            raise SystemExit(1)
+        elif warns:
+            print(f"\n  All checks passed, {warns} warning(s).")
+        else:
+            print("\n  All checks passed.")
+
+
+def cmd_perf(args: argparse.Namespace) -> None:
+    """Display current performance knobs with sources."""
+    from cts.semantic import DEFAULTS
+    from cts.semantic.config import load_config
+
+    fmt = getattr(args, "format", "text")
+    cfg = load_config()
+
+    knobs: list = []
+
+    def _add(
+        name: str,
+        env_var: str,
+        current: object,
+        default: object,
+        tip: str = "",
+    ) -> None:
+        source = "env" if os.environ.get(env_var) is not None else "default"
+        knobs.append({
+            "name": name,
+            "env_var": env_var,
+            "value": current,
+            "default": default,
+            "source": source,
+            "tip": tip,
+        })
+
+    # --- Semantic knobs ---
+    sem_env = os.environ.get("CTS_SEMANTIC_ENABLED")
+    sem_val = sem_env if sem_env is not None else "auto"
+    _add(
+        "semantic_enabled",
+        "CTS_SEMANTIC_ENABLED",
+        sem_val,
+        "auto",
+        "auto = on when semantic store exists for repo",
+    )
+    _add(
+        "chunk_lines",
+        "CTS_SEMANTIC_CHUNK_LINES",
+        cfg.chunk_lines,
+        DEFAULTS["chunk_lines"],
+        "Lines per chunk for indexing",
+    )
+    _add(
+        "overlap_lines",
+        "CTS_SEMANTIC_OVERLAP_LINES",
+        cfg.overlap_lines,
+        DEFAULTS["overlap_lines"],
+        "Overlap between chunks",
+    )
+    _add(
+        "topk_chunks",
+        "CTS_SEMANTIC_TOPK",
+        cfg.topk_chunks,
+        DEFAULTS["topk_chunks"],
+        "Top-K chunks returned by semantic search",
+    )
+    _add(
+        "max_slices",
+        "CTS_SEMANTIC_MAX_SLICES",
+        cfg.max_slices,
+        DEFAULTS["max_slices"],
+        "Max semantic slices added to bundle",
+    )
+    _add(
+        "max_seconds",
+        "CTS_SEMANTIC_MAX_SECONDS",
+        cfg.max_seconds,
+        DEFAULTS["max_seconds"],
+        "Time budget for semantic retrieval (seconds)",
+    )
+    _add(
+        "model_name",
+        "CTS_SEMANTIC_MODEL",
+        cfg.model_name,
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "Embedding model",
+    )
+    _add(
+        "device",
+        "CTS_SEMANTIC_DEVICE",
+        cfg.device,
+        "auto",
+        "Compute device: auto | cpu | cuda",
+    )
+
+    # --- Narrowing knobs ---
+    _add(
+        "candidate_strategy",
+        "CTS_SEMANTIC_CANDIDATE_STRATEGY",
+        cfg.candidate_strategy,
+        "exclude_top_k",
+        "Semantic candidate narrowing strategy",
+    )
+    _add(
+        "candidate_exclude_top_k",
+        "CTS_SEMANTIC_CANDIDATE_EXCLUDE_TOP_K",
+        cfg.candidate_exclude_top_k,
+        10,
+        "Lexical top-K files to skip for semantic",
+    )
+    _add(
+        "candidate_max_files",
+        "CTS_SEMANTIC_CANDIDATE_MAX_FILES",
+        cfg.candidate_max_files,
+        200,
+        "Max candidate files for semantic search",
+    )
+    _add(
+        "candidate_max_chunks",
+        "CTS_SEMANTIC_CANDIDATE_MAX_CHUNKS",
+        cfg.candidate_max_chunks,
+        20000,
+        "Max chunks to load for semantic search",
+    )
+
+    # --- Confidence + Autopilot ---
+    _add(
+        "confidence_gate",
+        "CTS_SEMANTIC_CONFIDENCE_GATE",
+        cfg.confidence_gate,
+        DEFAULTS["confidence_gate"],
+        "Confidence threshold for autopilot sufficiency",
+    )
+    _add(
+        "max_file_bytes",
+        "CTS_SEMANTIC_MAX_FILE_BYTES",
+        cfg.max_file_bytes,
+        DEFAULTS["max_file_bytes"],
+        "Skip files larger than this during indexing",
+    )
+
+    # --- Output ---
+    if fmt == "json":
+        print(json.dumps(knobs, indent=2, default=str))
+    else:
+        max_name = max(len(k["name"]) for k in knobs)
+        max_val = max(len(str(k["value"])) for k in knobs)
+        for k in knobs:
+            marker = "*" if k["source"] == "env" else " "
+            print(
+                f"  {marker} {k['name']:<{max_name}}  "
+                f"= {str(k['value']):<{max_val}}  "
+                f"({k['env_var']})"
+            )
+            if k["tip"]:
+                print(f"    {'':>{max_name}}    {k['tip']}")
+        print(f"\n  * = set via environment variable")
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     body = {
         "repo": args.repo,
@@ -250,18 +530,13 @@ def cmd_search(args: argparse.Namespace) -> None:
                     "explain_top": explain_top,
                 }
 
-                # Semantic fallback gate (opt-in via env var)
+                # Semantic fallback gate (default-on when store exists)
                 sem_flag = os.environ.get("CTS_SEMANTIC_ENABLED", "").lower()
-                if sem_flag in ("1", "true"):
+                sem_disabled = sem_flag in ("0", "false")
+                if not sem_disabled:
                     sem_db = _default_db_path(args.repo)
                     if os.path.exists(sem_db):
                         bk["semantic_store_path"] = sem_db
-                    else:
-                        print(
-                            f"semantic enabled but store missing "
-                            f"at {sem_db} — fallback disabled",
-                            file=sys.stderr,
-                        )
 
                 result = execute_refinements(
                     b,
@@ -1670,6 +1945,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Gateway health + config")
     _add_common_args(p_status)
 
+    # doctor
+    p_doctor = sub.add_parser("doctor", help="Check stack health and configuration")
+    p_doctor.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="text",
+        help="Output format (default: text)",
+    )
+
+    # perf
+    p_perf = sub.add_parser("perf", help="Show performance knobs and tuning tips")
+    p_perf.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="text",
+        help="Output format (default: text)",
+    )
+
     # search
     p_search = sub.add_parser("search", help="Ripgrep search with guardrails")
     p_search.add_argument("query", help="Search pattern")
@@ -2400,6 +2693,8 @@ def main(argv: List[str] | None = None) -> None:
 
     commands = {
         "status": cmd_status,
+        "doctor": cmd_doctor,
+        "perf": cmd_perf,
         "search": cmd_search,
         "slice": cmd_slice,
         "symbol": cmd_symbol,

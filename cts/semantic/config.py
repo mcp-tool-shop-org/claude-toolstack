@@ -54,8 +54,8 @@ class SemanticConfig:
         ]
     )
 
-    # Candidate narrowing (Phase 4.2, default off)
-    candidate_strategy: str = "none"  # none | exclude_top_k
+    # Candidate narrowing (Phase 4.2, default on after A/B validation)
+    candidate_strategy: str = "exclude_top_k"  # none | exclude_top_k
     candidate_exclude_top_k: int = 10
     candidate_max_files: int = 200
     candidate_max_chunks: int = 20000
