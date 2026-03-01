@@ -68,7 +68,10 @@ def _find_rg() -> List[str]:
     if shutil.which("rg"):
         return ["rg"]
     # Claude Code bundles ripgrep behind --ripgrep flag
-    claude_path = Path.home() / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+    claude_path = (
+        Path.home()
+        / "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude"
+    )
     if claude_path.exists():
         for exe in sorted(claude_path.glob("claude-code/*/claude.exe"), reverse=True):
             return [str(exe), "--ripgrep"]
@@ -85,7 +88,9 @@ def _get_rg() -> List[str]:
     return _RG_CMD
 
 
-def run_rg(query: str, repo_root: str, max_matches: int = MAX_MATCHES) -> Dict[str, Any]:
+def run_rg(
+    query: str, repo_root: str, max_matches: int = MAX_MATCHES
+) -> Dict[str, Any]:
     """Run ripgrep locally and return gateway-compatible search_data."""
     cmd = list(_get_rg()) + ["--json", "--max-count", str(max_matches)]
     for ex in DEFAULT_EXCLUDES:
@@ -136,15 +141,17 @@ def run_rg(query: str, repo_root: str, max_matches: int = MAX_MATCHES) -> Dict[s
         except ValueError:
             rel_path = raw_path.replace("\\", "/")
 
-        matches.append({
-            "path": rel_path,
-            "line": line_no,
-            "snippet": snippet,
-            "submatches": [
-                {"start": sm.get("start"), "end": sm.get("end")}
-                for sm in submatches
-            ],
-        })
+        matches.append(
+            {
+                "path": rel_path,
+                "line": line_no,
+                "snippet": snippet,
+                "submatches": [
+                    {"start": sm.get("start"), "end": sm.get("end")}
+                    for sm in submatches
+                ],
+            }
+        )
 
     return {
         "repo": "",  # filled by caller
@@ -220,6 +227,11 @@ def main() -> None:
         help="Max artifacts to produce (default: 80)",
     )
     parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Override output directory (default: artifacts/<variant>)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print queries without running",
@@ -233,11 +245,11 @@ def main() -> None:
 
     # Determine output dir and semantic flag
     if args.variant == "A":
-        out_dir = ARTIFACTS_ROOT / "A_lexical"
+        out_dir = Path(args.out_dir) if args.out_dir else ARTIFACTS_ROOT / "A_lexical"
         semantic_enabled = False
         label = "Lexical-only"
     else:
-        out_dir = ARTIFACTS_ROOT / "B_semantic"
+        out_dir = Path(args.out_dir) if args.out_dir else ARTIFACTS_ROOT / "B_semantic"
         semantic_enabled = True
         label = "Lexical + Semantic"
 
@@ -249,7 +261,7 @@ def main() -> None:
     print()
 
     if args.dry_run:
-        for i, q in enumerate(queries[:args.limit], 1):
+        for i, q in enumerate(queries[: args.limit], 1):
             print(f"  {i:3d}. [{q['repo'].split('/')[-1]}] {q['query']}")
         return
 
@@ -260,7 +272,7 @@ def main() -> None:
     produced = 0
     skipped = 0
 
-    for i, q in enumerate(queries[:args.limit], 1):
+    for i, q in enumerate(queries[: args.limit], 1):
         repo = q["repo"]
         root = q["root"]
         query = q["query"]
@@ -275,7 +287,9 @@ def main() -> None:
 
         if search_data["count"] == 0:
             skipped += 1
-            print(f"  {i:3d}/{args.limit} [{repo_short}] \"{query}\" -> 0 matches, skipped")
+            print(
+                f'  {i:3d}/{args.limit} [{repo_short}] "{query}" -> 0 matches, skipped'
+            )
             continue
 
         # Build bundle
@@ -352,7 +366,7 @@ def main() -> None:
                         break
 
         print(
-            f"  {i:3d}/{args.limit} [{repo_short}] \"{query}\" "
+            f'  {i:3d}/{args.limit} [{repo_short}] "{query}" '
             f"-> {search_data['count']} matches, "
             f"conf={conf_score:.2f}, "
             f"passes={n_passes}"

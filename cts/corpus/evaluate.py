@@ -104,6 +104,9 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     semantic_lifts = [
         r["semantic_lift"] for r in records if r.get("semantic_lift") is not None
     ]
+    semantic_times = [
+        r["semantic_time_ms"] for r in records if r.get("semantic_time_ms") is not None
+    ]
 
     return {
         "total": total,
@@ -125,6 +128,9 @@ def extract_kpis(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             round(len(semantic_action_runs) / total, 4) if total else 0.0
         ),
         "semantic_lift_mean": round(_mean(semantic_lifts), 4),
+        "semantic_time_ms_p90": (
+            round(_percentile(semantic_times, 90), 1) if semantic_times else 0.0
+        ),
     }
 
 
@@ -145,6 +151,7 @@ _LOWER_BETTER = {
     "autopilot_low_lift_rate",
     "bundle_bytes_p90",
     "should_autopilot_count",
+    "semantic_time_ms_p90",
 }
 
 # Informational KPIs (tracked but not used for verdict direction)
@@ -162,6 +169,7 @@ _NOISE_THRESHOLDS: Dict[str, float] = {
     "bundle_bytes_p90": 1024,
     "should_autopilot_count": 1,
     "semantic_lift_mean": 0.01,
+    "semantic_time_ms_p90": 5.0,
 }
 
 
