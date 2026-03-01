@@ -245,27 +245,42 @@ def plan_refinements(
         actions.append(a)
 
     # Priority 5: Semantic fallback — only when justified
-    # Trigger: low confidence + sparse matches + no structural wins
-    # + semantic store available + not already tried
+    # Two trigger branches:
+    #   Branch A: sparse lexical (< 5 sources, no def, low conf)
+    #   Branch B: high-hit but low-quality lexical (>= 5 sources,
+    #             no def, weak top score, low conf)
     already_tried = any(a["name"] == "semantic_fallback" for a in actions)
     semantic_available = params.get("semantic_store_path") is not None
     semantic_already_ran = params.get("_semantic_invoked", False)
+    top_score_w = signals.get("top_score_weight", 0.0)
 
     if (
         not already_tried
         and semantic_available
         and not semantic_already_ran
-        and len(sources) < 5
-        and def_found == 0.0
         and conf["score"] < 0.5
+        and def_found == 0.0
     ):
-        a = _action_semantic_fallback()
-        a["trigger_reason"] = (
-            f"confidence={conf['score']:.2f} < 0.5, "
-            f"only {len(sources)} source(s), "
-            f"no definition found — trying semantic"
-        )
-        actions.append(a)
+        # Branch A: sparse lexical — very few sources
+        if len(sources) < 5:
+            a = _action_semantic_fallback()
+            a["trigger_reason"] = (
+                f"[branch-A] confidence={conf['score']:.2f} < 0.5, "
+                f"only {len(sources)} source(s), "
+                f"no definition found — trying semantic"
+            )
+            actions.append(a)
+        # Branch B: many hits but low quality — lots of matches
+        # but top scores are weak (all shallow references)
+        elif top_score_w < 0.15:
+            a = _action_semantic_fallback()
+            a["trigger_reason"] = (
+                f"[branch-B] confidence={conf['score']:.2f} < 0.5, "
+                f"{len(sources)} source(s) but top_score_weight="
+                f"{top_score_w:.3f} < 0.15, "
+                f"no definition found — trying semantic"
+            )
+            actions.append(a)
 
     # Limit to 2 actions per pass to keep it bounded
     return actions[:2]
@@ -578,17 +593,14 @@ def execute_refinements(
 
             sig = inspect.signature(build_fn)
             has_var_kw = any(
-                p.kind == inspect.Parameter.VAR_KEYWORD
-                for p in sig.parameters.values()
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             )
             if has_var_kw:
                 new_kwargs = dict(current_params)
             else:
                 _valid_keys = set(sig.parameters.keys())
                 new_kwargs = {
-                    k: v
-                    for k, v in current_params.items()
-                    if k in _valid_keys
+                    k: v for k, v in current_params.items() if k in _valid_keys
                 }
             new_kwargs["debug"] = True  # always explain for confidence
             new_bundle = build_fn(**new_kwargs)

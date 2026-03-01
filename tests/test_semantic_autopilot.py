@@ -116,15 +116,70 @@ class TestSemanticFallbackPlanning:
         names = [a["name"] for a in actions]
         assert "semantic_fallback" not in names
 
-    def test_not_fired_when_many_sources(self):
-        """No semantic_fallback when match count is >= 5."""
+    def test_not_fired_when_many_sources_and_strong_scores(self):
+        """No semantic_fallback when many sources AND top scores are strong.
+
+        Branch A requires < 5 sources, Branch B requires top_score_weight < 0.15.
+        With 8 strong-scoring sources, neither branch triggers.
+        """
         bundle = self._make_bundle(sources=8)
         conf = self._low_conf(0.45)
+        # Strong top score prevents Branch B
+        conf["signals"]["top_score_weight"] = 0.25
         params = {"semantic_store_path": "/tmp/semantic.sqlite3"}
 
         actions = plan_refinements(bundle, conf, current_params=params)
         names = [a["name"] for a in actions]
         assert "semantic_fallback" not in names
+
+    def test_branch_b_fires_many_sources_weak_scores(self):
+        """Branch B triggers when many sources but top scores are weak.
+
+        >= 5 sources with top_score_weight < 0.15, no definition, low conf.
+        """
+        bundle = self._make_bundle(sources=10)
+        conf = self._low_conf(0.3)
+        conf["signals"]["top_score_weight"] = 0.06  # weak top score
+        conf["signals"]["slice_coverage"] = 0.15  # prevent add_slices
+        params = {
+            "semantic_store_path": "/tmp/semantic.sqlite3",
+            "max_matches": 100,  # prevent widen_search
+        }
+
+        actions = plan_refinements(bundle, conf, current_params=params)
+        names = [a["name"] for a in actions]
+        assert "semantic_fallback" in names
+
+    def test_branch_b_trigger_reason_labeled(self):
+        """Branch B trigger_reason includes [branch-B] label."""
+        bundle = self._make_bundle(sources=10)
+        conf = self._low_conf(0.3)
+        conf["signals"]["top_score_weight"] = 0.06
+        conf["signals"]["slice_coverage"] = 0.15
+        params = {
+            "semantic_store_path": "/tmp/semantic.sqlite3",
+            "max_matches": 100,
+        }
+
+        actions = plan_refinements(bundle, conf, current_params=params)
+        sem = [a for a in actions if a["name"] == "semantic_fallback"]
+        assert len(sem) == 1
+        assert "[branch-B]" in sem[0]["trigger_reason"]
+
+    def test_branch_a_trigger_reason_labeled(self):
+        """Branch A trigger_reason includes [branch-A] label."""
+        bundle = self._make_bundle(sources=2)
+        conf = self._low_conf(0.3)
+        conf["signals"]["slice_coverage"] = 0.15
+        params = {
+            "semantic_store_path": "/tmp/semantic.sqlite3",
+            "max_matches": 100,
+        }
+
+        actions = plan_refinements(bundle, conf, current_params=params)
+        sem = [a for a in actions if a["name"] == "semantic_fallback"]
+        assert len(sem) == 1
+        assert "[branch-A]" in sem[0]["trigger_reason"]
 
     def test_trigger_reason_present(self):
         """The action includes a descriptive trigger_reason."""
