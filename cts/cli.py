@@ -26,6 +26,8 @@ Usage:
   cts corpus experiment archive --experiment exp.json --result result.json
   cts corpus experiment evaluate --corpus corpus.jsonl --experiment exp.json
   cts corpus experiment trend --root experiments/ --format markdown
+  cts semantic index --repo org/repo --root ./repo [--max-files N]
+  cts semantic status --repo org/repo [--db PATH]
 
 Output modes: --json | --text (default) | --claude | --sidecar
 Bundle modes: default | error | symbol | change  (requires --format claude|sidecar)
@@ -1384,6 +1386,146 @@ def _experiment_trend(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Semantic CLI
+# ---------------------------------------------------------------------------
+
+
+def _default_db_path(repo: Optional[str]) -> str:
+    """Compute default SQLite path for a repo."""
+    if repo:
+        slug = repo.replace("/", "_").replace("\\", "_")
+        return os.path.join("gw-cache", slug, "semantic.sqlite3")
+    return "semantic.sqlite3"
+
+
+def cmd_semantic(args: argparse.Namespace) -> None:
+    action = getattr(args, "semantic_action", None)
+    if not action:
+        print(
+            "Error: semantic requires a subcommand (index, status, rebuild)",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if action == "index":
+        _semantic_index(args)
+    elif action == "status":
+        _semantic_status(args)
+    elif action == "rebuild":
+        _semantic_rebuild(args)
+
+
+def _semantic_index(args: argparse.Namespace) -> None:
+    from cts.semantic.config import load_config
+    from cts.semantic.embedder import create_embedder
+    from cts.semantic.indexer import index_repo
+    from cts.semantic.store import SemanticStore
+
+    repo: str = args.repo
+    root: str = args.root
+    db_path = args.db or _default_db_path(repo)
+    device = getattr(args, "device", "auto")
+    mock = getattr(args, "mock", False)
+    max_files = getattr(args, "max_files", 0)
+    max_chunks = getattr(args, "max_chunks", 0)
+    max_seconds = getattr(args, "max_seconds", 0)
+
+    config = load_config(device=device)
+    store = SemanticStore(db_path)
+    embedder = create_embedder(device=device, mock=mock)
+
+    def progress(stage: str, current: int, total: int) -> None:
+        if stage == "chunking_done":
+            print(
+                f"Chunked {current} files → {total} chunks",
+                file=sys.stderr,
+            )
+        elif stage == "embedding" and total > 0:
+            print(
+                f"  Embedded {current}/{total} chunks",
+                file=sys.stderr,
+            )
+
+    result = index_repo(
+        root,
+        repo,
+        store,
+        embedder,
+        config,
+        max_files=max_files,
+        max_chunks=max_chunks,
+        max_seconds=max_seconds,
+        progress_fn=progress,
+    )
+
+    store.close()
+
+    print(
+        f"Indexed {repo}: "
+        f"{result.files_scanned} files, "
+        f"{result.chunks_total} chunks, "
+        f"{result.chunks_embedded} embedded "
+        f"({result.elapsed_seconds:.1f}s)"
+    )
+    if result.errors:
+        for err in result.errors:
+            print(f"  Error: {err}", file=sys.stderr)
+
+
+def _semantic_status(args: argparse.Namespace) -> None:
+    from cts.semantic.store import SemanticStore
+
+    repo = getattr(args, "repo", None)
+    db_path = args.db or _default_db_path(repo)
+
+    if not os.path.exists(db_path):
+        print(f"No semantic index at {db_path}")
+        return
+
+    store = SemanticStore(db_path)
+    status = store.get_status()
+    store.close()
+
+    print(f"Semantic index: {db_path}")
+    print(f"  Schema version: {status['schema_version']}")
+    print(f"  Model:          {status['model']}")
+    print(f"  Dimension:      {status['dim']}")
+    print(f"  Chunks:         {status['chunks']}")
+    print(f"  Embeddings:     {status['embeddings']}")
+    print(f"  Last indexed:   {status['last_indexed_at']}")
+
+
+def _semantic_rebuild(args: argparse.Namespace) -> None:
+    from cts.semantic.config import load_config
+    from cts.semantic.embedder import create_embedder
+    from cts.semantic.indexer import index_repo
+    from cts.semantic.store import SemanticStore
+
+    repo: str = args.repo
+    root: str = args.root
+    db_path = args.db or _default_db_path(repo)
+    device = getattr(args, "device", "auto")
+    mock = getattr(args, "mock", False)
+
+    config = load_config(device=device)
+    store = SemanticStore(db_path)
+    store.rebuild()
+
+    embedder = create_embedder(device=device, mock=mock)
+
+    result = index_repo(root, repo, store, embedder, config)
+    store.close()
+
+    print(
+        f"Rebuilt {repo}: "
+        f"{result.files_scanned} files, "
+        f"{result.chunks_total} chunks, "
+        f"{result.chunks_embedded} embedded "
+        f"({result.elapsed_seconds:.1f}s)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1966,6 +2108,113 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write dashboard to file (default: stdout)",
     )
 
+    # -------------------------------------------------------------------
+    # semantic
+    # -------------------------------------------------------------------
+    p_sem = sub.add_parser("semantic", help="Semantic search")
+    sem_sub = p_sem.add_subparsers(dest="semantic_action", help="Semantic subcommands")
+
+    # semantic index
+    p_si = sem_sub.add_parser(
+        "index",
+        help="Build semantic index for a repository",
+    )
+    p_si.add_argument(
+        "--repo",
+        required=True,
+        help="Repository identifier (e.g., org/repo)",
+    )
+    p_si.add_argument(
+        "--root",
+        required=True,
+        help="Repository root directory to scan",
+    )
+    p_si.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="SQLite database path (default: auto)",
+    )
+    p_si.add_argument(
+        "--max-files",
+        type=int,
+        default=0,
+        help="Max files to index (0 = unlimited)",
+    )
+    p_si.add_argument(
+        "--max-chunks",
+        type=int,
+        default=0,
+        help="Max chunks to embed (0 = unlimited)",
+    )
+    p_si.add_argument(
+        "--max-seconds",
+        type=float,
+        default=0,
+        help="Time budget in seconds (0 = unlimited)",
+    )
+    p_si.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Compute device (default: auto)",
+    )
+    p_si.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock embedder (for testing, no GPU)",
+    )
+
+    # semantic status
+    p_ss = sem_sub.add_parser(
+        "status",
+        help="Show semantic index status",
+    )
+    p_ss.add_argument(
+        "--repo",
+        default=None,
+        help="Repository identifier (for default db path)",
+    )
+    p_ss.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="SQLite database path",
+    )
+
+    # semantic rebuild
+    p_sr = sem_sub.add_parser(
+        "rebuild",
+        help="Drop and rebuild semantic index",
+    )
+    p_sr.add_argument(
+        "--repo",
+        required=True,
+        help="Repository identifier",
+    )
+    p_sr.add_argument(
+        "--root",
+        required=True,
+        help="Repository root directory",
+    )
+    p_sr.add_argument(
+        "--db",
+        default=None,
+        metavar="PATH",
+        help="SQLite database path (default: auto)",
+    )
+    p_sr.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cpu", "cuda"],
+        help="Compute device (default: auto)",
+    )
+    p_sr.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock embedder (for testing, no GPU)",
+    )
+
     return parser
 
 
@@ -1986,6 +2235,7 @@ def main(argv: List[str] | None = None) -> None:
         "job": cmd_job,
         "sidecar": cmd_sidecar,
         "corpus": cmd_corpus,
+        "semantic": cmd_semantic,
     }
     fn = commands.get(args.command)
     if fn:
