@@ -570,8 +570,26 @@ def execute_refinements(
 
         # Execute the refined search
         try:
-            # Build new bundle with adjusted params
-            new_kwargs = dict(current_params)
+            # Build new bundle with adjusted params.
+            # Strip keys that build_fn doesn't accept (internal autopilot
+            # state like semantic_store_path, _semantic_invoked).
+            # If build_fn accepts **kwargs, pass everything through.
+            import inspect
+
+            sig = inspect.signature(build_fn)
+            has_var_kw = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in sig.parameters.values()
+            )
+            if has_var_kw:
+                new_kwargs = dict(current_params)
+            else:
+                _valid_keys = set(sig.parameters.keys())
+                new_kwargs = {
+                    k: v
+                    for k, v in current_params.items()
+                    if k in _valid_keys
+                }
             new_kwargs["debug"] = True  # always explain for confidence
             new_bundle = build_fn(**new_kwargs)
 
