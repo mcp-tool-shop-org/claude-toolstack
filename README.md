@@ -318,14 +318,12 @@ Claude Code runs directly on the host. Configure gateway as an MCP server or cal
 
 Use Claude Desktop's Code tab with an SSH environment pointing to your Linux host. The tool farm runs on the host; the GUI stays on your laptop.
 
-## Tuning
+## Documentation
 
-See [docs/tuning.md](docs/tuning.md) for:
-- Slice sizing by repo size (small/medium/large)
-- PSI monitoring and thrash detection
-- Adding language servers (clangd, rust-analyzer, tsserver)
-- Vector store options (SQLite+FAISS, Weaviate, Milvus)
-- Job preset customization
+| Doc | What It Covers |
+|-----|---------------|
+| [Handbook](docs/HANDBOOK.md) | Complete operational reference — architecture, commands, security, tuning, troubleshooting, design decisions |
+| [Tuning Guide](docs/tuning.md) | Slice sizing by repo size, PSI monitoring, adding language servers, vector store options, job presets |
 
 ## No-Thrash Validation
 

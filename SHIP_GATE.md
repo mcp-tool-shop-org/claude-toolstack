@@ -39,7 +39,7 @@
 - [x] `[cli]` `--help` output accurate for all commands and flags (2026-03-01)
 - [x] `[cli|mcp|desktop]` Logging levels defined: silent / normal / verbose / debug — secrets redacted at all levels (2026-03-01) — --debug flag, no secrets in output
 - [ ] `[mcp]` SKIP: not an MCP server
-- [ ] `[complex]` SKIP: HANDBOOK not needed — tuning.md covers ops
+- [x] `[complex]` HANDBOOK exists — docs/HANDBOOK.md (13 chapters + 3 appendices) (2026-03-01)
 
 ## D. Shipping Hygiene
 
