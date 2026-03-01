@@ -18,6 +18,7 @@ Usage:
   cts corpus apply tuning.json --repos-yaml repos.yaml [--dry-run]
   cts corpus rollback rollback.json
   cts corpus evaluate before.jsonl after.jsonl --format markdown
+  cts corpus baseline corpus.jsonl --out baseline.json --label lexical-only
   cts corpus experiment init --id EXP1 --description "..." --out experiment.json
   cts corpus experiment propose --corpus tuning.json --repos-yaml repos.yaml
   cts corpus experiment list --root experiments/ --format text
@@ -584,6 +585,8 @@ def cmd_corpus(args: argparse.Namespace) -> None:
         _corpus_evaluate(args)
     elif action == "experiment":
         _corpus_experiment(args)
+    elif action == "baseline":
+        _corpus_baseline(args)
 
 
 def _corpus_ingest(args: argparse.Namespace) -> None:
@@ -971,6 +974,50 @@ def _corpus_evaluate(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # Experiment subcommands
 # ---------------------------------------------------------------------------
+
+
+def _corpus_baseline(args: argparse.Namespace) -> None:
+    from cts.corpus.baseline import (
+        capture_baseline,
+        render_baseline_json,
+        render_baseline_markdown,
+        render_baseline_text,
+    )
+
+    corpus_path: str = args.corpus
+    label: str = getattr(args, "label", "lexical-only")
+    fmt: str = getattr(args, "baseline_format", "json")
+    out_path: Optional[str] = getattr(args, "out", None)
+    mode_filter: Optional[str] = getattr(args, "mode_filter", None)
+    repo_filter: Optional[str] = getattr(args, "repo_filter", None)
+    since_days: Optional[float] = getattr(args, "since", None)
+
+    baseline = capture_baseline(
+        corpus_path,
+        label=label,
+        mode_filter=mode_filter,
+        repo_filter=repo_filter,
+        since_days=since_days,
+    )
+
+    if fmt == "json":
+        output = render_baseline_json(baseline)
+    elif fmt == "markdown":
+        output = render_baseline_markdown(baseline)
+    else:
+        output = render_baseline_text(baseline)
+
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(output)
+        n = baseline.get("corpus_records", 0)
+        lbl = baseline.get("label", "?")
+        print(
+            f"Baseline: {out_path} ({n} records, label={lbl})",
+            file=sys.stderr,
+        )
+    else:
+        print(output)
 
 
 def _corpus_experiment(args: argparse.Namespace) -> None:
@@ -1614,6 +1661,53 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Write evaluation to file (default: stdout)",
+    )
+
+    # corpus baseline
+    p_cb = corpus_sub.add_parser(
+        "baseline",
+        help="Capture KPI baseline snapshot from corpus",
+    )
+    p_cb.add_argument(
+        "corpus",
+        help="Path to corpus JSONL file",
+    )
+    p_cb.add_argument(
+        "--label",
+        default="lexical-only",
+        help="Human-readable label (default: lexical-only)",
+    )
+    p_cb.add_argument(
+        "--format",
+        dest="baseline_format",
+        choices=["json", "text", "markdown"],
+        default="json",
+        help="Output format (default: json)",
+    )
+    p_cb.add_argument(
+        "--out",
+        default=None,
+        metavar="PATH",
+        help="Write baseline to file (default: stdout)",
+    )
+    p_cb.add_argument(
+        "--mode",
+        dest="mode_filter",
+        default=None,
+        help="Filter by mode",
+    )
+    p_cb.add_argument(
+        "--repo",
+        dest="repo_filter",
+        default=None,
+        help="Filter by repo",
+    )
+    p_cb.add_argument(
+        "--since",
+        type=float,
+        default=None,
+        metavar="DAYS",
+        help="Only include records from last N days",
     )
 
     # corpus experiment

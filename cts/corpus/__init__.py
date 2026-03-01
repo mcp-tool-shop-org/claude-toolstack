@@ -36,6 +36,12 @@ from cts.corpus.patch import (
     render_plan_json,
     render_plan_text,
 )
+from cts.corpus.baseline import (
+    capture_baseline,
+    render_baseline_json,
+    render_baseline_markdown,
+    render_baseline_text,
+)
 from cts.corpus.archive import (
     archive_experiment,
     validate_registry_entry,
@@ -122,4 +128,8 @@ __all__ = [
     "render_dashboard_markdown",
     "render_dashboard_json",
     "render_dashboard_text",
+    "capture_baseline",
+    "render_baseline_json",
+    "render_baseline_markdown",
+    "render_baseline_text",
 ]
