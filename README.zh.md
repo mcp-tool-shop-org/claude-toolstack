@@ -16,13 +16,13 @@
 
 ---
 
-## What This Is
+## 这是什么
 
-A ready-to-deploy stack that keeps Claude Code productive on large, multi-language repositories without thrashing a 64-GB Linux workstation.
+一个可以直接使用的软件栈，能够在大型、多语言的代码仓库中保持 Claude Code 的高效运行，而无需在配置为 64GB 内存的 Linux 工作站上造成性能瓶颈。
 
-**Core idea:** don't load the repo into Claude. Keep durable indexes near the code in resource-governed containers. Stream only the smallest necessary evidence back to Claude through a thin HTTP gateway.
+**核心思想：** 不要将整个代码仓库导入到 Claude 中。将持久化的索引数据存储在靠近代码的、资源受限的容器中。仅通过一个轻量级的 HTTP 网关，将最必要的证据片段流式传输回 Claude。
 
-## Architecture
+## 架构
 
 ```
 64-GB Linux host (Ubuntu 22.04 / Fedora 38)
@@ -42,83 +42,83 @@ A ready-to-deploy stack that keeps Claude Code productive on large, multi-langua
     └── calls gateway → gets bounded evidence
 ```
 
-## Quick Start
+## 快速入门指南
 
-### 1. Bootstrap the host
+### 1. 启动主机
 
 ```bash
 sudo ./scripts/bootstrap.sh
 ```
 
-This installs:
-- zram swap (Ubuntu) or verifies swap-on-zram (Fedora)
-- Sysctl tuning (swappiness, inotify watches)
-- systemd slices with MemoryHigh/Max governance
-- Docker daemon config (local log driver)
-- claude-toolstack.service (boot management)
+此脚本会安装以下内容：
+- zram 交换空间（Ubuntu 系统）或验证是否启用了 zram 交换空间（Fedora 系统）
+- 系统参数调整（包括 swappiness 值和 inotify 监控）
+- 使用 MemoryHigh/Max 策略的 systemd 服务组
+- Docker 守护进程配置（本地日志驱动）
+- claude-toolstack.service（引导管理）
 
-### 2. Configure
+### 2. 配置
 
 ```bash
 cp .env.example .env
 # Edit .env: set API_KEY, ALLOWED_REPOS, etc.
 ```
 
-### 3. Clone repos
+### 3. 克隆代码仓库
 
 ```bash
 # Repos go under /workspace/repos/<org>/<repo>
 git clone https://github.com/myorg/myrepo /workspace/repos/myorg/myrepo
 ```
 
-### 4. Start the stack
+### 4. 启动堆栈
 
 ```bash
 docker compose up -d --build
 ```
 
-### 5. Verify
+### 5. 验证
 
 ```bash
 ./scripts/smoke-test.sh "$API_KEY" myorg/myrepo
 ./scripts/health.sh
 ```
 
-## Gateway API
+## 网关API
 
-All endpoints require `x-api-key` header. Gateway binds to `127.0.0.1:8088` only.
+所有接口都需要包含 `x-api-key` 头部信息。网关仅绑定到 `127.0.0.1:8088` 地址。
 
-| Method | Endpoint | Purpose |
+| 方法。 | 终端。 | 目的。 |
 |--------|----------|---------|
-| `GET` | `/v1/status` | Health + config |
-| `POST` | `/v1/search/rg` | Ripgrep with guardrails |
-| `POST` | `/v1/file/slice` | Fetch file range (max 800 lines) |
-| `POST` | `/v1/index/ctags` | Build ctags index (async) |
-| `POST` | `/v1/symbol/ctags` | Query symbol definitions |
-| `POST` | `/v1/run/job` | Run allowlisted test/build/lint |
-| `GET` | `/v1/metrics` | Prometheus-format counters |
+| `GET` | `/v1/status` | 健康 + 配置 |
+| `POST` | `/v1/search/rg` | 带有安全机制的 Ripgrep。 |
+| `POST` | `/v1/file/slice` | 获取文件指定范围的内容（最多800行）。 |
+| `POST` | `/v1/index/ctags` | 构建 ctags 索引（异步）。 |
+| `POST` | `/v1/symbol/ctags` | 查询符号定义。 |
+| `POST` | `/v1/run/job` | 运行允许列表中的测试、构建和代码检查。 |
+| `GET` | `/v1/metrics` | Prometheus 格式的计数器。 |
 
-All responses include `X-Request-ID` for end-to-end correlation. Clients can send their own via the `X-Request-ID` header.
+所有响应都包含 `X-Request-ID` 字段，用于端到端的追踪。客户端可以通过 `X-Request-ID` 头部发送自己的请求 ID。
 
-## CLI (`cts`)
+## 命令行界面 (cts)
 
-A zero-dependency Python CLI that wraps all gateway endpoints.
+一个零依赖的 Python 命令行工具，它封装了所有网关的接口。
 
-### Install
+### 安装
 
 ```bash
 pip install -e .
 # or: pipx install -e .
 ```
 
-### Configure
+### 配置
 
 ```bash
 export CLAUDE_TOOLSTACK_API_KEY=<your-key>
 export CLAUDE_TOOLSTACK_URL=http://127.0.0.1:8088  # default
 ```
 
-### Usage
+### 用法
 
 ```bash
 # Gateway health
@@ -154,16 +154,16 @@ cts semantic search "what does auth do?" --repo myorg/myrepo
 # All commands support: --format json|text|claude --request-id <id> --debug
 ```
 
-### Evidence Bundles v2 (`--format claude`)
+### 证据包版本 2 (使用 `--format claude` 选项)
 
-The `--claude` output mode produces compact, paste-ready evidence packs with structured v2 headers. Four bundle modes are available:
+“--claude” 输出模式会生成简洁、可以直接复制粘贴的证据包，并采用结构化的 V2 格式。提供四种打包模式供选择：
 
-| Mode | Flag | What it does |
+| 模式。 | 国旗。 | 它的作用/功能。 |
 |------|------|-------------|
-| `default` | `--bundle default` | Search + ranked matches + context slices |
-| `error` | `--bundle error` | Stack-trace-aware: extracts files from trace, boosts in ranking |
-| `symbol` | `--bundle symbol` | Definitions + call sites from search |
-| `change` | `--bundle change` | Git diff + hunk context slices |
+| `default` | `--bundle default` | 搜索 + 排名匹配 + 上下文片段。 |
+| `error` | `--bundle error` | 支持堆栈跟踪：能够从跟踪信息中提取文件，并提升其在搜索结果中的排名。 |
+| `symbol` | `--bundle symbol` | 定义及调用位置（来自搜索结果）。 |
+| `change` | `--bundle change` | Git diff，以及包含代码块上下文信息的差异显示。 |
 
 ```bash
 # Default bundle (search + slices)
@@ -185,9 +185,9 @@ cts search "handler" --repo myorg/myrepo --format claude \
   --repo-root /workspace/repos/myorg/myrepo
 ```
 
-Tuning: `--evidence-files 5` (files to slice), `--context 30` (lines around hit).
+参数调整：`--evidence-files 5` (指定需要处理的文件数量)，`--context 30` (指定匹配结果周围的行数)。
 
-### curl examples
+### curl 命令示例
 
 ```bash
 # Search
@@ -206,58 +206,58 @@ curl -sS -H "x-api-key: $KEY" -H "content-type: application/json" \
   http://127.0.0.1:8088/v1/run/job | jq
 ```
 
-## Resource Governance
+## 资源治理
 
-systemd slices enforce MemoryHigh (throttle) and MemoryMax (hard cap) per service group:
+systemd 的 "slices" 功能可以对每个服务组实施内存限制，包括 "MemoryHigh"（软限额，会进行降频）和 "MemoryMax"（硬限额，超出则强制停止）。
 
-| Slice | MemoryHigh | MemoryMax | Purpose |
+| 切片。 | 内存优化/内存提升。 | MemoryMax (产品名称，可直接音译) | 目的。 |
 |-------|-----------|-----------|---------|
-| `claude-gw` | 2 GB | 4 GB | Gateway + socket proxy |
-| `claude-index` | 6 GB | 10 GB | Indexers, search |
-| `claude-lsp` | 8 GB | 16 GB | Language servers |
-| `claude-build` | 10 GB | 18 GB | Build/test runners |
-| `claude-vector` | 8 GB | 16 GB | Vector DB (optional) |
+| `claude-gw` | 2 亿字节。 | 4 GB (千兆字节) | 网关 + 代理服务器。 |
+| `claude-index` | 6 GB。 | 10 兆字节。 | 索引员，搜索。 |
+| `claude-lsp` | 8 GB。 | 16 GB。 | 语言服务器。 |
+| `claude-build` | 10 兆字节。 | 18 兆字节。 | 构建/测试框架。 |
+| `claude-vector` | 8 GB。 | 16 GB。 | 向量数据库（可选）。 |
 
-These are medium-repo defaults. Edit the slice files in `systemd/` for your workload.
+这些是默认的存储配置。请根据您的工作负载，修改 `systemd/` 目录下的配置文件。
 
-OS + headroom: 10-14 GB always reserved for filesystem cache, desktop, SSH.
+操作系统 + 剩余空间：10-14GB 的空间始终预留用于文件系统缓存、桌面环境和 SSH 连接。
 
-## Security
+## 安全
 
-### Threat Model
+### 威胁模型
 
-**What we protect against:**
-- Gateway abuse (unauthorized access, resource exhaustion)
-- Path traversal (escaping repo root via `../` or symlinks)
-- Docker socket escalation (raw socket = root-equivalent)
-- Output flooding (unbounded search/build results consuming memory)
+**我们保护的内容：**
+- 网关滥用（未经授权的访问、资源耗尽）
+- 路径遍历（通过“../”或符号链接绕过代码仓库根目录）
+- Docker 套接字权限提升（原始套接字相当于 root 权限）
+- 输出泛滥（无限的搜索/构建结果占用内存）
 
-**Security layers:**
+**安全层：**
 
-| Layer | Mechanism |
+| 层。 | 机制。 |
 |-------|-----------|
-| Auth | API key (`x-api-key` header), configurable |
-| Network | Gateway binds `127.0.0.1` only |
-| Docker | Socket proxy (Tecnativa), only `CONTAINERS+EXEC` |
-| Repos | Allowlist/denylist with glob support |
-| Paths | `realpath` jail, null byte rejection |
-| Commands | Preset allowlist only, no arbitrary exec |
-| Output | 512 KB cap, line truncation |
-| Rate limit | Token bucket per key+ip |
-| Audit | JSONL log, key hashed, rotated |
-| Containers | Named allowlist, no wildcards |
-| Resources | cgroup v2 slices, per-container mem/cpu limits |
+| 身份验证。 | API 密钥（`x-api-key` 头部），可配置。 |
+| 网络 | 网关仅绑定到 `127.0.0.1` 地址。 |
+| Docker | 套接字代理 (Tecnativa)，仅支持 `CONTAINERS+EXEC` 功能。 |
+| 回购协议。 | 允许/禁止列表，支持通配符。 |
+| 路径。 | `realpath` 隔离，拒绝空字节。 |
+| 命令。 | 仅允许预设的命令，不允许执行任意命令。 |
+| 输出。 | 限制为 512 KB，支持行截断。 |
+| 速率限制。 | 每个键+IP 地址的令牌桶。 |
+| 审计。 | JSONL 日志，键进行哈希处理，并进行轮换。 |
+| 容器。 | 命名允许列表，不支持通配符。 |
+| 资源。 | cgroup v2 分片，每个容器的内存/CPU 限制。 |
 
-### What the gateway cannot do
+### 网关无法执行的功能
 
-- Execute arbitrary commands (preset allowlist only)
-- Access repos outside `/workspace/repos` (path jail)
-- Touch Docker images, volumes, networks, or system (proxy blocks)
-- Return unbounded output (512 KB hard cap)
-- Accept connections from non-localhost (bind address)
-- Collect or send telemetry — **no telemetry, no phone-home, no analytics**
+- 执行任意命令（仅允许预设的命令）。
+- 访问 `/workspace/repos` 目录之外的仓库（路径隔离）。
+- 修改 Docker 镜像、卷、网络或系统（代理阻止）。
+- 返回无限长度的输出（限制为 512 KB）。
+- 接受来自非本地主机的连接（绑定地址）。
+- 收集或发送遥测数据——**不收集遥测数据，不进行任何数据传输，不进行任何分析。**
 
-## Directory Structure
+## 目录结构
 
 ```
 claude-toolstack/
@@ -303,34 +303,34 @@ claude-toolstack/
     └── tuning.md          # Slice tuning guide
 ```
 
-## Claude Code Integration
+## Claude Code 集成
 
-### Local Linux
+### 本地 Linux
 
-Claude Code runs directly on the host. Configure gateway as an MCP server or call it via HTTP from task scripts.
+Claude Code 直接运行在主机上。将网关配置为 MCP 服务器，或通过 HTTP 从任务脚本调用它。
 
-### Remote (macOS/Windows)
+### 远程 (macOS/Windows)
 
-Use Claude Desktop's Code tab with an SSH environment pointing to your Linux host. The tool farm runs on the host; the GUI stays on your laptop.
+使用 Claude Desktop 的代码选项卡，并通过 SSH 连接到您的 Linux 主机。工具运行在主机上，GUI 界面保留在您的笔记本电脑上。
 
-## Tuning
+## 调优
 
-See [docs/tuning.md](docs/tuning.md) for:
-- Slice sizing by repo size (small/medium/large)
-- PSI monitoring and thrash detection
-- Adding language servers (clangd, rust-analyzer, tsserver)
-- Vector store options (SQLite+FAISS, Weaviate, Milvus)
-- Job preset customization
+请参阅 [docs/tuning.md](docs/tuning.md)，了解以下内容：
+- 根据仓库大小调整分片大小（小/中/大）。
+- PSI 监控和资源耗尽检测。
+- 添加语言服务器（clangd, rust-analyzer, tsserver）。
+- 向量存储选项（SQLite+FAISS, Weaviate, Milvus）。
+- 任务预设自定义。
 
-## No-Thrash Validation
+## 无资源耗尽验证
 
-After deployment, confirm:
+部署完成后，请确认：
 
-1. **PSI full near zero**: `watch -n 1 'cat /proc/pressure/memory'`
-2. **Containers hit MemoryHigh before Max**: check slice status
-3. **SSH stays responsive**: during indexing and builds
-4. **Containment works**: shrink one service's limit, run heavy task, confirm only that container dies
+1. **PSI 满值接近零**: `watch -n 1 'cat /proc/pressure/memory'`
+2. **容器在达到最大值之前达到内存高水位**: 检查分片状态。
+3. **SSH 连接保持响应**: 在索引和构建过程中。
+4. **隔离有效**: 缩小一个服务的限制，运行一个高负载任务，确认只有该容器崩溃。
 
 ---
 
-Built by <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a>
+由 <a href="https://mcp-tool-shop.github.io/">MCP Tool Shop</a> 构建。

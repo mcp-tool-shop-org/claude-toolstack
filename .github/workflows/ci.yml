@@ -55,8 +55,17 @@ jobs:
           cts --version
           cts --help
 
-      - name: Run unit tests
-        run: python -m pytest tests/ -v
+      - name: Run unit tests with coverage
+        run: |
+          pip install pytest-cov
+          python -m pytest tests/ -v --cov=cts --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
 
   container-build:
     runs-on: ubuntu-latest

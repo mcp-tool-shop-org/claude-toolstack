@@ -36,3 +36,12 @@ gw-cache/
 
 # Polyglot cache
 .polyglot-cache.json
+
+# Site build artifacts
+site/.astro/
+site/dist/
+site/node_modules/
+
+# Build output
+dist/
+*.whl
