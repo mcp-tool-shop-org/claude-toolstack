@@ -14,7 +14,7 @@ export const config: SiteConfig = {
     headlineAccent: 'without the thrash.',
     description: 'Keep Claude Code productive on large, multi-language repositories. Durable indexes in resource-governed containers — stream only the smallest necessary evidence.',
     primaryCta: { href: '#quick-start', label: 'Get started' },
-    secondaryCta: { href: '#features', label: 'How it works' },
+    secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
       { label: 'Bootstrap', code: 'sudo ./scripts/bootstrap.sh' },
       { label: 'Deploy', code: 'docker compose up -d --build' },
